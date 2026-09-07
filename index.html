@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BLC Scanner</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
+<style>
+  :root{--bg:#0d0f12;--panel:#16191f;--panel2:#1e2229;--line:#2a2f38;--blue:#1f6feb;--blueline:#2f81f7;--text:#e6e8eb;--dim:#9aa4b2;--red:#ff6b6b;--amber:#e0a72e;--green:#3fbf60}
+  *{box-sizing:border-box}
+  body{background:var(--bg);color:var(--text);font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:0;padding:16px 14px 60px}
+  header{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+  header .stripe{width:10px;height:32px;border-radius:2px;background:#000;position:relative;overflow:hidden}
+  header .stripe::after{content:'';position:absolute;left:0;right:0;top:14px;height:4px;background:var(--blueline)}
+  header h1{font-size:18px;margin:0}
+  header .sub{color:var(--dim);font-size:12px}
+  .btn{background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:9px 14px;font-size:14px;cursor:pointer}
+  .btn:active{opacity:0.8}
+  .btn.ghost{background:transparent}
+  .btn.small{padding:6px 10px;font-size:12px}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  input{background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:14px}
+  .scan-status{font-size:16px;font-weight:700;text-align:center;padding:12px;border-radius:9px;margin:10px 0;background:var(--panel2);border:1px solid var(--line)}
+  .scan-status.mode-station{background:rgba(31,111,235,0.15);border-color:var(--blue)}
+  .scan-status.mode-bin{background:rgba(22,163,74,0.15);border-color:#16a34a}
+  .scan-status.mode-ok{background:rgba(22,163,74,0.2);border-color:#16a34a}
+  .scan-status.mode-err{background:rgba(220,38,38,0.15);border-color:#dc2626}
+  #scanRegion{width:100%;max-width:420px;margin:0 auto;border-radius:10px;overflow:hidden;background:#000}
+  #scanRegion video{width:100%;display:block}
+  .station-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin:14px 0}
+  .station-btn{padding:14px 6px;border-radius:9px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font-weight:700;cursor:pointer;text-align:center}
+  table{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px}
+  th{color:var(--dim);text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.4px;padding:6px 6px;border-bottom:1px solid var(--line)}
+  td{padding:7px 6px;border-bottom:1px solid var(--line);vertical-align:middle}
+  .muted{color:var(--dim);font-size:12px}
+  .scrollx{overflow-x:auto}
+  .banner{background:#3a1518;color:var(--red);border:1px solid #5a2226;border-radius:8px;padding:10px 12px;font-size:13px;margin-bottom:10px;display:none}
+  .cfg{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:14px}
+  .cfg label{display:block;font-size:12px;color:var(--dim);margin-bottom:3px}
+  .cfg input{width:100%;margin-bottom:8px}
+</style>
+</head>
+<body>
+<header>
+  <div class="stripe"></div>
+  <div><h1>BLC Scanner</h1><div class="sub">Blue Line Crafts — standalone scan station</div></div>
+</header>
+
+<div id="cfgBox" class="cfg" style="display:none">
+  <label>Tracker web app URL (the /exec link)</label>
+  <input id="cfgBase" placeholder="https://script.google.com/macros/s/AKfycb.../exec">
+  <label>API token</label>
+  <input id="cfgToken" placeholder="token">
+  <button class="btn" onclick="saveConfig()">Save &amp; connect</button>
+</div>
+
+<div id="offlineBanner" class="banner">⚠ Couldn't reach the tracker. Check your connection, or tap "Change setup" below to fix the URL/token.</div>
+
+<div class="row" style="margin-bottom:8px">
+  <button class="btn" id="scanStartBtn" onclick="startScanner()">▶ Start camera</button>
+  <button class="btn ghost" id="scanStopBtn" onclick="stopScanner()" style="display:none">■ Stop camera</button>
+  <button class="btn ghost small" onclick="scanReset()">↺ Reset</button>
+  <button class="btn ghost small" onclick="loadData(true)">⟳ Refresh data</button>
+  <button class="btn ghost small" onclick="showConfig()">⚙ Change setup</button>
+</div>
+
+<div id="scanStatus" class="scan-status">Loading tracker data…</div>
+
+<div id="scanRegion"></div>
+
+<div class="row" style="margin:14px 0;justify-content:center">
+  <input id="scanManualInput" placeholder="Or type a code (e.g. BLC:BIN:Bin 7)" style="flex:1;min-width:200px" onkeydown="if(event.key==='Enter')scanManualGo()">
+  <button class="btn ghost small" onclick="scanManualGo()">Go</button>
+</div>
+
+<div id="scanReceivingPicker"></div>
+<div id="scanOrderChecklist"></div>
+<div id="scanBinView"></div>
+
+<script>
+/* ============ config ============ */
+var CFG_KEY='blc_scanner_cfg';
+var CFG={base:'',token:''};
+function loadConfig(){
+  try{
+    var raw=localStorage.getItem(CFG_KEY);
+    if(raw)CFG=JSON.parse(raw);
+  }catch(e){}
+}
+function showConfig(){
+  document.getElementById('cfgBase').value=CFG.base||'';
+  document.getElementById('cfgToken').value=CFG.token||'';
+  document.getElementById('cfgBox').style.display='block';
+}
+function saveConfig(){
+  CFG.base=document.getElementById('cfgBase').value.trim().replace(/\/+$/,'');
+  CFG.token=document.getElementById('cfgToken').value.trim();
+  try{localStorage.setItem(CFG_KEY,JSON.stringify(CFG));}catch(e){}
+  document.getElementById('cfgBox').style.display='none';
+  loadData(true);
+}
+
+/* ============ data ============ */
+var DB={orders:[],items:[],inventory:[]};
+function orderItems(oid){return DB.items.filter(function(i){return i.orderId===oid;});}
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+function setOffline(on){document.getElementById('offlineBanner').style.display=on?'block':'none';}
+function loadData(manual){
+  if(!CFG.base||!CFG.token){showConfig();return;}
+  scanSetStatus('Loading tracker data…');
+  fetch(CFG.base+'?api=orders&token='+encodeURIComponent(CFG.token))
+    .then(function(r){return r.json();})
+    .then(function(json){
+      DB.orders=json.orders||[];DB.items=json.items||[];DB.inventory=json.inventory||[];
+      setOffline(false);
+      scanRenderStatus();
+      if(manual)scanBeep(true);
+    })
+    .catch(function(err){
+      setOffline(true);
+      scanSetStatus('⚠ Could not load tracker data — check the URL/token or your connection.','mode-err');
+    });
+}
+/* Fire-and-forget-ish POST to the tracker's scanAction endpoint (see
+ * handleScanAction_ in Code.gs). Uses text/plain to dodge a CORS preflight —
+ * Apps Script still parses the body as JSON regardless of declared type. */
+function postScan(action,onDone){
+  fetch(CFG.base,{
+    method:'POST',
+    headers:{'Content-Type':'text/plain;charset=utf-8'},
+    body:JSON.stringify({token:CFG.token,scanAction:action})
+  }).then(function(r){return r.json();}).then(function(res){
+    setOffline(false);
+    if(res&&res.error){scanSetStatus('⚠ '+res.error,'mode-err');scanBeep(false);}
+    if(onDone)onDone(res);
+  }).catch(function(err){
+    setOffline(true);
+    scanSetStatus('⚠ Could not reach the tracker to save that — try again.','mode-err');
+    scanBeep(false);
+  });
+}
+
+/* ============ scanner state (same logic as the tracker's Scanner tab) ============ */
+var scanHtml5Qrcode=null;
+var scanRunning=false;
+var scanMode=null;
+var scanStationName=null;
+var scanBinLoc=null;
+var STATIONS=['Receiving','Production','Packing','Shipping'];
+var STATION_ICON={Receiving:'🚚',Production:'🖨',Packing:'📦',Shipping:'🚀'};
+var STATION_FLAG={Production:'produced',Packing:'packed'};
+var PACK_STAGES=['Needs Ordered','Purchased','Received','In Production','Packed'];
+
+function scanSetStatus(msg,cls){
+  var el=document.getElementById('scanStatus');
+  el.textContent=msg;
+  el.className='scan-status'+(cls?(' '+cls):'');
+}
+function scanRenderStatus(){
+  if(scanMode==='station')scanSetStatus(STATION_ICON[scanStationName]+' Station: '+scanStationName+' — now scan (or type) an order\'s QR code','mode-station');
+  else if(scanMode==='bin')scanSetStatus('📍 Bin: '+scanBinLoc,'mode-bin');
+  else scanSetStatus('Scan a station or bin code to begin.');
+}
+function scanReset(){
+  scanMode=null;scanStationName=null;scanBinLoc=null;
+  document.getElementById('scanReceivingPicker').innerHTML='';
+  document.getElementById('scanOrderChecklist').innerHTML='';
+  document.getElementById('scanBinView').innerHTML='';
+  scanRenderStatus();
+}
+function startScanner(){
+  if(typeof Html5Qrcode==='undefined'){alert('Camera scanner library failed to load — check your connection and reload.');return;}
+  if(scanRunning)return;
+  scanHtml5Qrcode=new Html5Qrcode('scanRegion');
+  scanHtml5Qrcode.start(
+    {facingMode:'environment'},
+    {fps:10,qrbox:{width:240,height:240}},
+    function(text){scanHandleCode(text);},
+    function(){}
+  ).then(function(){
+    scanRunning=true;
+    document.getElementById('scanStartBtn').style.display='none';
+    document.getElementById('scanStopBtn').style.display='';
+  }).catch(function(err){
+    alert('Could not start camera: '+(err&&err.message?err.message:err));
+  });
+}
+function stopScanner(){
+  if(!scanRunning||!scanHtml5Qrcode)return;
+  scanHtml5Qrcode.stop().then(function(){
+    scanHtml5Qrcode.clear();
+    scanRunning=false;
+    document.getElementById('scanStartBtn').style.display='';
+    document.getElementById('scanStopBtn').style.display='none';
+  }).catch(function(){scanRunning=false;});
+}
+function scanManualGo(){
+  var el=document.getElementById('scanManualInput');
+  var v=el.value.trim();
+  if(!v)return;
+  el.value='';
+  scanHandleCode(v);
+}
+function scanBeep(ok){
+  try{
+    var ctx=new (window.AudioContext||window.webkitAudioContext)();
+    var o=ctx.createOscillator(),g=ctx.createGain();
+    o.frequency.value=ok?880:220; o.connect(g); g.connect(ctx.destination);
+    g.gain.setValueAtTime(0.15,ctx.currentTime);
+    o.start(); o.stop(ctx.currentTime+0.12);
+  }catch(e){}
+  if(navigator.vibrate)navigator.vibrate(ok?60:[80,60,80]);
+}
+function scanHandleCode(text){
+  var s=String(text||'').trim();
+  var m=s.match(/^BLC:(ORDER|BIN|STATION):(.+)$/i);
+  if(!m){scanSetStatus('⚠ Not a recognized BLC code: '+s,'mode-err');scanBeep(false);return;}
+  var kind=m[1].toUpperCase(), val=m[2];
+  if(kind==='STATION')return scanOnStation(val);
+  if(kind==='BIN')return scanOnBin(val);
+  if(kind==='ORDER')return scanOnOrder(val);
+}
+function scanOnStation(name){
+  var match=STATIONS.find(function(x){return x.toLowerCase()===name.trim().toLowerCase();});
+  if(!match){scanSetStatus('⚠ Unknown station: '+name,'mode-err');scanBeep(false);return;}
+  scanMode='station';scanStationName=match;scanBinLoc=null;
+  document.getElementById('scanBinView').innerHTML='';
+  document.getElementById('scanOrderChecklist').innerHTML='';
+  scanBeep(true);
+  if(match==='Receiving')renderReceivingPicker();
+  else document.getElementById('scanReceivingPicker').innerHTML='';
+  scanRenderStatus();
+}
+function scanOnBin(loc){
+  scanMode='bin';scanBinLoc=loc;scanStationName=null;
+  document.getElementById('scanReceivingPicker').innerHTML='';
+  document.getElementById('scanOrderChecklist').innerHTML='';
+  scanBeep(true);
+  scanRenderStatus();
+  renderScanBinView();
+}
+function scanOnOrder(orderId){
+  if(scanMode!=='station'||!scanStationName){
+    scanSetStatus('⚠ Scan a station code first, then scan the order.','mode-err');scanBeep(false);return;
+  }
+  if(scanStationName==='Receiving'){
+    scanSetStatus('⚠ Receiving orders are picked from the list below, not scanned.','mode-err');scanBeep(false);return;
+  }
+  var o=DB.orders.find(function(x){return x.id===orderId;});
+  if(!o){scanSetStatus('⚠ Order not found: '+orderId+' — tap "Refresh data" if this order was just created.','mode-err');scanBeep(false);return;}
+  if(STATION_FLAG[scanStationName]){
+    scanBeep(true);
+    scanSetStatus('📋 '+o.customer+' — check off the item(s) done at '+scanStationName,'mode-station');
+    renderScanOrderChecklist(o,scanStationName);
+  }else{
+    applyStationToOrder(o,scanStationName);
+  }
+}
+function fulfillmentForShippingScan(method){
+  if(method==='Ship')return 'Shipped';
+  if(method==='Local Delivery')return 'Delivered';
+  return 'Picked Up';
+}
+function applyStationToOrder(o,station){
+  if(station==='Shipping'){
+    var status=fulfillmentForShippingScan(o.method);
+    o.fulfillment=status; // optimistic
+    postScan({type:'orderField',orderId:o.id,field:'fulfillment',value:status});
+    scanBeep(true);
+    scanSetStatus('✅ '+o.customer+' — marked '+status,'mode-ok');
+  }else{
+    var stageForStation={Receiving:'Received',Production:'In Production',Packing:'Packed'};
+    var stage=stageForStation[station];
+    var flags={
+      'Needs Ordered':{purchased:false,received:false,produced:false,packed:false},
+      'Purchased':{purchased:true,received:false,produced:false,packed:false},
+      'Received':{purchased:true,received:true,produced:false,packed:false},
+      'In Production':{purchased:true,received:true,produced:true,packed:false},
+      'Packed':{purchased:true,received:true,produced:true,packed:true}
+    }[stage];
+    orderItems(o.id).forEach(function(i){
+      i.purchased=flags.purchased?'TRUE':'';i.received=flags.received?'TRUE':'';
+      i.produced=flags.produced?'TRUE':'';i.packed=flags.packed?'TRUE':'';
+    });
+    postScan({type:'orderStage',orderId:o.id,stage:stage});
+    scanBeep(true);
+    scanSetStatus('✅ '+o.customer+' — '+station+' done ('+stage+')','mode-ok');
+  }
+  setTimeout(scanRenderStatus,2500);
+}
+function orderPackState(items){
+  if(!items.length)return 'Needs Ordered';
+  if(items.every(function(i){return String(i.packed)==='TRUE';}))return 'Packed';
+  if(items.every(function(i){return String(i.produced)==='TRUE';}))return 'In Production';
+  if(items.every(function(i){return String(i.received)==='TRUE';}))return 'Received';
+  if(items.every(function(i){return String(i.purchased)==='TRUE';}))return 'Purchased';
+  return 'Needs Ordered';
+}
+function isArchived(o){return String(o.archived)==='TRUE';}
+function isDone(o){return o.fulfillment==='Awaiting Pickup/Delivery'||o.fulfillment==='Shipped'||o.fulfillment==='Delivered'||o.fulfillment==='Picked Up';}
+function renderReceivingPicker(){
+  var open=DB.orders.filter(function(o){return !isArchived(o)&&!isDone(o);});
+  var notReceived=open.filter(function(o){
+    var items=orderItems(o.id);
+    return items.length&&PACK_STAGES.indexOf(orderPackState(items))<2;
+  });
+  var el=document.getElementById('scanReceivingPicker');
+  if(!notReceived.length){el.innerHTML='<p class="muted" style="margin-top:10px">Nothing waiting on Receiving.</p>';return;}
+  var h='<p class="muted" style="margin:10px 0 6px">Tap the order this shipment is for:</p><div class="row">';
+  notReceived.forEach(function(o){
+    h+='<button class="btn ghost small" onclick="receivingPick(\''+o.id+'\')">'+esc(o.customer)+(o.orderNumber?' · '+esc(o.orderNumber):'')+'</button>';
+  });
+  h+='</div>';
+  el.innerHTML=h;
+}
+function receivingPick(orderId){
+  var o=DB.orders.find(function(x){return x.id===orderId;});
+  if(!o)return;
+  applyStationToOrder(o,'Receiving');
+  renderReceivingPicker();
+}
+function procShort(k){var p=k.split(':');if(p[0]===p[1])return p[0];return p[0]==='Outsource'?'Out:'+p[1]:p[1]+(p[1]==='Sublimation'?'('+p[0][0]+')':'');}
+function itemProcs(i){return String(i.process||'').split(',').filter(function(x){return x;});}
+function renderScanOrderChecklist(o,station){
+  var flag=STATION_FLAG[station];
+  var items=orderItems(o.id);
+  var el=document.getElementById('scanOrderChecklist');
+  if(!items.length){el.innerHTML='<p class="muted" style="margin-top:10px">This order has no items.</p>';return;}
+  var allOn=items.every(function(i){return String(i[flag])==='TRUE';});
+  var h='<div style="margin:10px 0"><b>'+esc(o.customer)+'</b>'+(o.orderNumber?' · '+esc(o.orderNumber):'')+' — '+station+'</div>';
+  h+='<div class="row" style="margin-bottom:6px"><label style="display:flex;align-items:center;gap:6px;cursor:pointer">'
+    +'<input type="checkbox" '+(allOn?'checked':'')+' onchange="scanToggleAllItems(\''+o.id+'\',\''+station+'\',this.checked)"> <b>Select all</b></label></div>';
+  h+='<div class="scrollx"><table><tr><th></th><th>Style/Description</th><th>Color</th><th>Size</th><th>Qty</th><th>Process</th></tr>';
+  items.forEach(function(i){
+    var on=String(i[flag])==='TRUE';
+    h+='<tr><td><input type="checkbox" '+(on?'checked':'')+' onchange="scanToggleItem(\''+i.id+'\',\''+flag+'\',this.checked,\''+o.id+'\',\''+station+'\')"></td>'
+      +'<td>'+esc(i.style)+(i.description?' — '+esc(i.description):'')+'</td><td>'+esc(i.color)+'</td><td>'+esc(i.size)+'</td><td>'+i.qty+'</td>'
+      +'<td class="muted">'+(itemProcs(i).length?itemProcs(i).map(procShort).join(', '):'—')+'</td></tr>';
+  });
+  h+='</table></div><div class="row" style="margin-top:8px"><button class="btn ghost small" onclick="scanOrderChecklistClose()">Done</button></div>';
+  el.innerHTML=h;
+}
+function scanToggleItem(itemId,flag,val,orderId,station){
+  var i=DB.items.find(function(x){return x.id===itemId;});
+  if(i){
+    i[flag]=val?'TRUE':'';
+    var fIdx=['purchased','received','produced','packed'].indexOf(flag);
+    if(val&&fIdx>0)['purchased','received','produced','packed'].slice(0,fIdx).forEach(function(cf){i[cf]='TRUE';});
+  }
+  postScan({type:'itemFlag',itemId:itemId,field:flag,value:val});
+  scanBeep(true);
+  var o=DB.orders.find(function(x){return x.id===orderId;});
+  if(o)renderScanOrderChecklist(o,station);
+}
+function scanToggleAllItems(orderId,station,val){
+  var flag=STATION_FLAG[station];
+  orderItems(orderId).forEach(function(i){
+    i[flag]=val?'TRUE':'';
+    postScan({type:'itemFlag',itemId:i.id,field:flag,value:val});
+  });
+  scanBeep(true);
+  var o=DB.orders.find(function(x){return x.id===orderId;});
+  if(o)renderScanOrderChecklist(o,station);
+}
+function scanOrderChecklistClose(){
+  document.getElementById('scanOrderChecklist').innerHTML='';
+  scanRenderStatus();
+}
+function renderScanBinView(){
+  var el=document.getElementById('scanBinView');
+  var items=DB.inventory.filter(function(i){return i.location===scanBinLoc;});
+  var h='';
+  if(!items.length){h='<p class="muted">No stock currently in '+esc(scanBinLoc)+'.</p>';el.innerHTML=h;return;}
+  h+='<div class="scrollx"><table><tr><th>Style/Description</th><th>Color</th><th>Size</th><th>Qty</th><th></th></tr>';
+  items.forEach(function(i){
+    h+='<tr><td>'+esc(i.style)+(i.description?' — '+esc(i.description):'')+'</td><td>'+esc(i.color)+'</td><td>'+esc(i.size)+'</td>'
+      +'<td id="qty-'+i.id+'">'+i.qty+'</td>'
+      +'<td><button class="btn ghost small" onclick="binBump(\''+i.id+'\',-1)">−</button> <button class="btn ghost small" onclick="binBump(\''+i.id+'\',1)">+</button></td></tr>';
+  });
+  h+='</table></div>';
+  el.innerHTML=h;
+}
+function binBump(id,d){
+  var i=DB.inventory.find(function(x){return x.id===id;});
+  if(!i)return;
+  i.qty=Math.max(0,(Number(i.qty)||0)+d);
+  var cell=document.getElementById('qty-'+id); if(cell)cell.textContent=i.qty;
+  postScan({type:'invAdjust',id:id,delta:d});
+  scanBeep(true);
+}
+
+/* ============ boot ============ */
+loadConfig();
+if(!CFG.base||!CFG.token)showConfig();
+loadData();
+</script>
+</body>
+</html>
