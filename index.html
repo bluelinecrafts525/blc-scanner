@@ -101,7 +101,7 @@ function saveConfig(){
 }
 
 /* ============ data ============ */
-var DB={orders:[],items:[],inventory:[]};
+var DB={orders:[],items:[],inventory:[],supplies:[]};
 function orderItems(oid){return DB.items.filter(function(i){return i.orderId===oid;});}
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
 function setOffline(on){document.getElementById('offlineBanner').style.display=on?'block':'none';}
@@ -111,7 +111,7 @@ function loadData(manual){
   fetch(CFG.base+'?api=orders&token='+encodeURIComponent(CFG.token))
     .then(function(r){return r.json();})
     .then(function(json){
-      DB.orders=json.orders||[];DB.items=json.items||[];DB.inventory=json.inventory||[];
+      DB.orders=json.orders||[];DB.items=json.items||[];DB.inventory=json.inventory||[];DB.supplies=json.supplies||[];
       setOffline(false);
       scanRenderStatus();
       if(manual)scanBeep(true);
@@ -146,8 +146,8 @@ var scanRunning=false;
 var scanMode=null;
 var scanStationName=null;
 var scanBinLoc=null;
-var STATIONS=['Receiving','Production','Packing','Shipping'];
-var STATION_ICON={Receiving:'🚚',Production:'🖨',Packing:'📦',Shipping:'🚀'};
+var STATIONS=['Purchased','Receiving','Production','Packing','Shipping'];
+var STATION_ICON={Purchased:'💰',Receiving:'🚚',Production:'🖨',Packing:'📦',Shipping:'🚀'};
 var STATION_FLAG={Production:'produced',Packing:'packed'};
 var PACK_STAGES=['Needs Ordered','Purchased','Received','In Production','Packed'];
 
@@ -213,15 +213,33 @@ function scanBeep(ok){
 }
 function scanHandleCode(text){
   var s=String(text||'').trim();
-  var m=s.match(/^BLC:(ORDER|BIN|STATION):(.+)$/i);
+  var m=s.match(/^BLC:(ORDER|BIN|STATION|SUPPLY):(.+)$/i);
   if(!m){scanSetStatus('⚠ Not a recognized BLC code: '+s,'mode-err');scanBeep(false);return;}
   var kind=m[1].toUpperCase(), val=m[2];
   if(kind==='STATION')return scanOnStation(val);
   if(kind==='BIN')return scanOnBin(val);
   if(kind==='ORDER')return scanOnOrder(val);
+  if(kind==='SUPPLY')return scanOnSupply(val);
+}
+function scanOnSupply(id){
+  var s=(DB.supplies||[]).find(function(x){return String(x.id)===String(id);});
+  if(!s){scanSetStatus('⚠ Unknown supply code: '+id,'mode-err');scanBeep(false);return;}
+  scanBeep(true);
+  var raw=prompt('Restock "'+s.item+'" — how many to add? (current: '+(s.qty||0)+' '+(s.unit||'')+')','1');
+  if(raw===null)return;
+  var addQty=Number(raw);
+  if(!addQty){scanSetStatus('No change made to '+s.item,'mode-station');return;}
+  postScan({type:'supplyRestock',id:id,addQty:addQty},function(res){
+    if(res&&res.scanResult!=null){
+      s.qty=res.scanResult;
+      scanSetStatus('✅ '+s.item+' restocked: '+s.qty+' '+(s.unit||'')+' on hand','mode-ok');
+    }
+  });
 }
 function scanOnStation(name){
-  var match=STATIONS.find(function(x){return x.toLowerCase()===name.trim().toLowerCase();});
+  var n=name.trim().toLowerCase();
+  var match=STATIONS.find(function(x){return x.toLowerCase()===n;});
+  if(!match)match=STATIONS.find(function(x){var xl=x.toLowerCase();return xl.indexOf(n)===0||n.indexOf(xl)===0;});
   if(!match){scanSetStatus('⚠ Unknown station: '+name,'mode-err');scanBeep(false);return;}
   scanMode='station';scanStationName=match;scanBinLoc=null;
   document.getElementById('scanBinView').innerHTML='';
@@ -269,7 +287,7 @@ function applyStationToOrder(o,station){
     scanBeep(true);
     scanSetStatus('✅ '+o.customer+' — marked '+status,'mode-ok');
   }else{
-    var stageForStation={Receiving:'Received',Production:'In Production',Packing:'Packed'};
+    var stageForStation={Purchased:'Purchased',Receiving:'Received',Production:'In Production',Packing:'Packed'};
     var stage=stageForStation[station];
     var flags={
       'Needs Ordered':{purchased:false,received:false,produced:false,packed:false},
