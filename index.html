@@ -225,7 +225,8 @@ function scanOnSupply(id){
   var s=(DB.supplies||[]).find(function(x){return String(x.id)===String(id);});
   if(!s){scanSetStatus('⚠ Unknown supply code: '+id,'mode-err');scanBeep(false);return;}
   scanBeep(true);
-  var raw=prompt('Restock "'+s.item+'" — how many to add? (current: '+(s.qty||0)+' '+(s.unit||'')+')','1');
+  var defaultQty=(String(s.category||'').toLowerCase()==='poly bag')?100:1;
+  var raw=prompt('Restock "'+s.item+'" — how many to add? (current: '+(s.qty||0)+' '+(s.unit||'')+')',String(defaultQty));
   if(raw===null)return;
   var addQty=Number(raw);
   if(!addQty){scanSetStatus('No change made to '+s.item,'mode-station');return;}
@@ -246,6 +247,7 @@ function scanOnStation(name){
   document.getElementById('scanOrderChecklist').innerHTML='';
   scanBeep(true);
   if(match==='Receiving')renderReceivingPicker();
+  else if(match==='Purchased')renderPurchasedPicker();
   else document.getElementById('scanReceivingPicker').innerHTML='';
   scanRenderStatus();
 }
@@ -330,6 +332,27 @@ function renderReceivingPicker(){
   });
   h+='</div>';
   el.innerHTML=h;
+}
+function renderPurchasedPicker(){
+  var open=DB.orders.filter(function(o){return !isArchived(o)&&!isDone(o);});
+  var needsOrdered=open.filter(function(o){
+    var items=orderItems(o.id);
+    return items.length&&orderPackState(items)==='Needs Ordered';
+  });
+  var el=document.getElementById('scanReceivingPicker'); // shared picker slot — only one station is active at a time
+  if(!needsOrdered.length){el.innerHTML='<p class="muted" style="margin-top:10px">Nothing waiting on Purchasing.</p>';return;}
+  var h='<p class="muted" style="margin:10px 0 6px">Tap the order you just ordered materials for:</p><div class="row">';
+  needsOrdered.forEach(function(o){
+    h+='<button class="btn ghost small" onclick="purchasedPick(\''+o.id+'\')">'+esc(o.customer)+(o.orderNumber?' · '+esc(o.orderNumber):'')+'</button>';
+  });
+  h+='</div>';
+  el.innerHTML=h;
+}
+function purchasedPick(orderId){
+  var o=DB.orders.find(function(x){return x.id===orderId;});
+  if(!o)return;
+  applyStationToOrder(o,'Purchased');
+  renderPurchasedPicker();
 }
 function receivingPick(orderId){
   var o=DB.orders.find(function(x){return x.id===orderId;});
