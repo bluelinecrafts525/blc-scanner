@@ -39,6 +39,15 @@
   .cfg{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:14px}
   .cfg label{display:block;font-size:12px;color:var(--dim);margin-bottom:3px}
   .cfg input{width:100%;margin-bottom:8px}
+  /* Custom confirm/prompt overlay — replaces window.confirm/prompt so the
+   * camera stream never has to sit behind a blocking native browser dialog
+   * (iOS Safari in particular can leave the html5-qrcode video feed frozen
+   * after a confirm()/prompt() call returns). */
+  #scanDialogOverlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;align-items:center;justify-content:center;padding:16px}
+  #scanDialogBox{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;max-width:360px;width:100%}
+  #scanDialogMsg{white-space:pre-wrap;margin-bottom:12px;font-size:15px;line-height:1.4}
+  #scanDialogInputWrap{margin-bottom:12px}
+  #scanDialogInput{width:100%}
 </style>
 </head>
 <body>
@@ -79,6 +88,17 @@
 <div id="scanBinView"></div>
 <div id="scanThreadView"></div>
 
+<div id="scanDialogOverlay">
+  <div id="scanDialogBox">
+    <div id="scanDialogMsg"></div>
+    <div id="scanDialogInputWrap" style="display:none"><input id="scanDialogInput"></div>
+    <div class="row" style="justify-content:flex-end">
+      <button class="btn ghost" id="scanDialogCancelBtn">Cancel</button>
+      <button class="btn" id="scanDialogOkBtn">OK</button>
+    </div>
+  </div>
+</div>
+
 <script>
 /* ============ config ============ */
 var CFG_KEY='blc_scanner_cfg';
@@ -107,6 +127,41 @@ var DB={orders:[],items:[],inventory:[],supplies:[],threadSpools:[],threadColors
 function orderItems(oid){return DB.items.filter(function(i){return i.orderId===oid;});}
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
 function setOffline(on){document.getElementById('offlineBanner').style.display=on?'block':'none';}
+/* ============ custom confirm/prompt (camera-safe) ============
+ * Native window.confirm()/prompt() block the whole page, and on iOS Safari
+ * that can leave the html5-qrcode camera feed frozen even after the dialog
+ * is dismissed (Bob reported this — "camera is freezing after any
+ * confirmation"). These render an in-page overlay instead, so nothing ever
+ * blocks the main thread and the camera keeps running underneath. Every
+ * call site that used confirm()/prompt() now awaits these. */
+function scanConfirm(msg){
+  return new Promise(function(resolve){
+    document.getElementById('scanDialogMsg').textContent=msg;
+    document.getElementById('scanDialogInputWrap').style.display='none';
+    var ok=document.getElementById('scanDialogOkBtn'), cancel=document.getElementById('scanDialogCancelBtn');
+    ok.style.display='';cancel.style.display='';
+    document.getElementById('scanDialogOverlay').style.display='flex';
+    function done(val){document.getElementById('scanDialogOverlay').style.display='none';resolve(val);}
+    ok.onclick=function(){done(true);};
+    cancel.onclick=function(){done(false);};
+  });
+}
+function scanPrompt(msg,defVal){
+  return new Promise(function(resolve){
+    document.getElementById('scanDialogMsg').textContent=msg;
+    var wrap=document.getElementById('scanDialogInputWrap'), inp=document.getElementById('scanDialogInput');
+    inp.value=defVal==null?'':String(defVal);
+    wrap.style.display='';
+    var ok=document.getElementById('scanDialogOkBtn'), cancel=document.getElementById('scanDialogCancelBtn');
+    ok.style.display='';cancel.style.display='';
+    document.getElementById('scanDialogOverlay').style.display='flex';
+    setTimeout(function(){inp.focus();inp.select();},50);
+    function done(val){document.getElementById('scanDialogOverlay').style.display='none';resolve(val);}
+    ok.onclick=function(){done(inp.value);};
+    cancel.onclick=function(){done(null);};
+    inp.onkeydown=function(e){if(e.key==='Enter'){e.preventDefault();done(inp.value);}};
+  });
+}
 function loadData(manual){
   if(!CFG.base||!CFG.token){showConfig();return;}
   scanSetStatus('Loading tracker data…');
@@ -273,24 +328,24 @@ function threadColorLookup(threadNumber){
  * catalogued); Remove asks the thread number then which machine+needle
  * it's going onto, which decrements the drawer and loads the needle in one
  * step via the same removeThreadFromDrawer scanAction. */
-function scanOnDrawer(drawer){
+async function scanOnDrawer(drawer){
   scanBeep(true);
   document.getElementById('scanReceivingPicker').innerHTML='';
   document.getElementById('scanOrderChecklist').innerHTML='';
   document.getElementById('scanBinView').innerHTML='';
   scanSetStatus('🧵 Drawer: '+drawer,'mode-bin');
-  var mode=(prompt('Drawer "'+drawer+'" — Add or Remove a spool? (type A or R)')||'').trim().toLowerCase();
+  var mode=((await scanPrompt('Drawer "'+drawer+'" — Add or Remove a spool? (type A or R)'))||'').trim().toLowerCase();
   if(!mode)return;
   if(mode.charAt(0)==='a'){
-    var num=(prompt('Thread number?')||'').trim();
+    var num=((await scanPrompt('Thread number?'))||'').trim();
     if(!num)return;
     var hit=threadColorLookup(num);
     var brand=hit?hit.brand:'', color=hit?hit.colorName:'';
     if(!hit){
-      brand=(prompt('Brand? (Madeira / Richword / Other)','Other')||'').trim();
-      color=(prompt('Color name?')||'').trim();
+      brand=((await scanPrompt('Brand? (Madeira / Richword / Other)','Other'))||'').trim();
+      color=((await scanPrompt('Color name?'))||'').trim();
     }
-    var qty=Number(prompt('How many spools?','1'))||1;
+    var qty=Number(await scanPrompt('How many spools?','1'))||1;
     postScan({type:'threadAdd',drawer:drawer,brand:brand,threadNumber:num,color:color,qty:qty},function(res){
       if(res&&res.ok!==false){
         loadData();
@@ -298,16 +353,16 @@ function scanOnDrawer(drawer){
       }
     });
   } else if(mode.charAt(0)==='r'){
-    var num2=(prompt('Thread number to remove from '+drawer+'?')||'').trim();
+    var num2=((await scanPrompt('Thread number to remove from '+drawer+'?'))||'').trim();
     if(!num2)return;
     var row=(DB.threadSpools||[]).find(function(t){return t.locKind==='drawer'&&t.drawer===drawer&&String(t.threadNumber).toLowerCase()===num2.toLowerCase();});
     if(!row){scanSetStatus('⚠ '+num2+' isn\'t logged in '+drawer,'mode-err');scanBeep(false);return;}
     var machines=(DB.machines||[]).filter(function(m){return String(m.archived)!=='TRUE';});
     var machine=machines.length>1
-      ? (prompt('Which machine?\n'+machines.map(function(m){return m.name;}).join(', '), machines[0].name)||'').trim()
+      ? ((await scanPrompt('Which machine?\n'+machines.map(function(m){return m.name;}).join(', '), machines[0].name))||'').trim()
       : (machines[0]?machines[0].name:'Machine 1');
     if(!machine)return;
-    var needle=Number(prompt('Which needle is it going on? (1-'+((machines.find(function(m){return m.name===machine;})||{}).needleCount||15)+')'));
+    var needle=Number(await scanPrompt('Which needle is it going on? (1-'+((machines.find(function(m){return m.name===machine;})||{}).needleCount||15)+')'));
     if(!needle)return;
     postScan({type:'threadRemove',drawer:drawer,brand:row.brand,threadNumber:row.threadNumber,machine:machine,needle:needle},function(res){
       loadData();
@@ -317,12 +372,12 @@ function scanOnDrawer(drawer){
     scanSetStatus('Type A to add or R to remove.','mode-err');
   }
 }
-function scanOnSupply(id){
+async function scanOnSupply(id){
   var s=(DB.supplies||[]).find(function(x){return String(x.id)===String(id);});
   if(!s){scanSetStatus('⚠ Unknown supply code: '+id,'mode-err');scanBeep(false);return;}
   scanBeep(true);
   var defaultQty=(String(s.category||'').toLowerCase()==='poly bag')?100:1;
-  var raw=prompt('Restock "'+s.item+'" — how many to add? (current: '+(s.qty||0)+' '+(s.unit||'')+')',String(defaultQty));
+  var raw=await scanPrompt('Restock "'+s.item+'" — how many to add? (current: '+(s.qty||0)+' '+(s.unit||'')+')',String(defaultQty));
   if(raw===null)return;
   var addQty=Number(raw);
   if(!addQty){scanSetStatus('No change made to '+s.item,'mode-station');return;}
@@ -373,7 +428,7 @@ function scanOnProcess(key){
  * Ignore — see setItemReceivingStatus in Code.gs. The old boolean
  * "received" field is kept in sync by the backend, so this can just read it. */
 function itemReceived(i){return String(i.received)==='TRUE';}
-function scanOnOrder(orderId){
+async function scanOnOrder(orderId){
   if(scanMode==='process'&&scanProcessKey){
     var op=findOrderByScan_(orderId);
     if(!op){scanSetStatus('⚠ Order not found: '+orderId+' — tap "Refresh data" if this order was just created.','mode-err');scanBeep(false);return;}
@@ -397,7 +452,7 @@ function scanOnOrder(orderId){
     var notReceivedCount=allMatching.length-matching.length;
     var notice=notReceivedCount?(' ('+notReceivedCount+' item(s) not shown — not yet received)'):'';
     var stillOpen=matching.filter(function(i){return itemProcsDone(i).indexOf(scanProcessKey)===-1;});
-    if(stillOpen.length&&confirm('Are all '+stillOpen.length+' '+procLabel(scanProcessKey)+' item(s) on '+op.customer+'\'s order being produced right now?\n\n(Cancel to pick specific items instead.)')){
+    if(stillOpen.length&&await scanConfirm('Are all '+stillOpen.length+' '+procLabel(scanProcessKey)+' item(s) on '+op.customer+'\'s order being produced right now?\n\n(Cancel to pick specific items instead.)')){
       stillOpen.forEach(function(i){setProcessDone(i.id,op.id,scanProcessKey,true);});
       scanSetStatus('✅ '+op.customer+' — all '+procLabel(scanProcessKey)+' item(s) marked done'+notice,'mode-ok');
       document.getElementById('scanOrderChecklist').innerHTML='';
@@ -431,7 +486,7 @@ function scanOnOrder(orderId){
       return;
     }
     if(notProduced.length){
-      if(!confirm('⚠ '+notProduced.length+' item(s) are bypassed and not yet through production ('+notProduced.map(function(i){return i.style||i.description||'item';}).join(', ')+'). Pack anyway?')){
+      if(!await scanConfirm('⚠ '+notProduced.length+' item(s) are bypassed and not yet through production ('+notProduced.map(function(i){return i.style||i.description||'item';}).join(', ')+'). Pack anyway?')){
         return;
       }
     }
@@ -622,12 +677,12 @@ function scanOrderChecklistClose(){
  * once at order intake now and travel with the order, so packing no longer
  * pops a label modal; instead it walks straight to marking the order done
  * (Delivered/Shipped/Picked Up) right from the scan. */
-function scanPackingFlow(o){
-  if(confirm('📦 '+o.customer+' — is everything ready to be packed?')){
+async function scanPackingFlow(o){
+  if(await scanConfirm('📦 '+o.customer+' — is everything ready to be packed?')){
     renderScanPackMethodChoice(o,orderItems(o.id).map(function(i){return i.id;}));
     return;
   }
-  if(!confirm('Are all items included in this pack?')){
+  if(!await scanConfirm('Are all items included in this pack?')){
     renderScanPackSelectChecklist(o);
     return;
   }
@@ -655,12 +710,12 @@ function scanTogglePackSelect(itemId,val){
   if(val){if(scanPackSelectedIds.indexOf(itemId)===-1)scanPackSelectedIds.push(itemId);}
   else{scanPackSelectedIds=scanPackSelectedIds.filter(function(x){return x!==itemId;});}
 }
-function scanPackSelectContinue(orderId){
+async function scanPackSelectContinue(orderId){
   var o=DB.orders.find(function(x){return x.id===orderId;});
   if(!o)return;
   var ids=scanPackSelectedIds||[];
   if(!ids.length){scanSetStatus('Select at least one item','mode-err');return;}
-  var separately=confirm('Are these items being packed and shipped separately from the rest of the order?\n\nOK = yes, separately\nCancel = no, staying together — waiting on the other items');
+  var separately=await scanConfirm('Are these items being packed and shipped separately from the rest of the order?\n\nOK = yes, separately\nCancel = no, staying together — waiting on the other items');
   scanPackSelectedIds=null;
   if(separately){
     renderScanPackMethodChoice(o,ids);
