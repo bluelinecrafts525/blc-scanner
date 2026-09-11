@@ -146,6 +146,16 @@ function postScan(action,onDone){
 /* ============ scanner state (same logic as the tracker's Scanner tab) ============ */
 var scanHtml5Qrcode=null;
 var scanRunning=false;
+/* The camera decodes continuously (10fps) and the same label usually stays
+ * in frame for a beat after a scan — without this, every dialog-driven flow
+ * (production "are these being produced?", the packing wizard's confirms)
+ * re-fires the instant you tap OK/Cancel and the code is still in view,
+ * which looked like the popup "just kept coming back." Ignore an identical
+ * code seen again within this window; a genuinely new scan of the SAME
+ * order later (e.g. to check it off at a later station) still works once
+ * the window passes. */
+var SCAN_DEDUPE_MS=3000;
+var scanLastCode=null, scanLastCodeAt=0;
 var scanMode=null;
 var scanStationName=null;
 var scanProcessKey=null;
@@ -157,6 +167,12 @@ var STATIONS=['Purchased','Receiving','Packing','Shipping'];
 var STATION_ICON={Purchased:'💰',Receiving:'🚚',Packing:'📦',Shipping:'🚀'};
 var STATION_FLAG={Packing:'packed'};
 var PACK_STAGES=['Needs Ordered','Purchased','Received','In Production','Packed'];
+/* Mirrors Index.html's PACKAGE_SIZES exactly — the packing wizard here asks
+ * which bag/box size(s) were used right after marking an order done, same
+ * as the in-app Scanner tab's packaging modal (openPackagingModal), so
+ * Supplies stays accurate whether Bob packs from the desktop app or the
+ * standalone camera scanner. */
+var PACKAGE_SIZES=['10x13 Poly Bag','12x15 Poly Bag','14x19 Poly Bag','17x22 Poly Bag','19x19 Poly Bag','24x24 Poly Bag','Small Box','Medium Box','Large Box','XL Box'];
 /* Every real process EXCEPT Outsource and Shipping gets its own production QR
  * station (Sept 2026, mirrors PROCESS_STATION_KEYS in Index.html) — must stay
  * in sync with the canonical list in fixLegacyProcessTags() (Code.gs). */
@@ -234,6 +250,9 @@ function findOrderByScan_(scannedId){
 }
 function scanHandleCode(text){
   var s=String(text||'').trim();
+  var now=Date.now();
+  if(s===scanLastCode&&(now-scanLastCodeAt)<SCAN_DEDUPE_MS)return; // still in frame from the last scan — ignore
+  scanLastCode=s;scanLastCodeAt=now;
   var m=s.match(/^BLC:(ORDER|BIN|STATION|PROC|SUPPLY|DRAWER):(.+)$/i);
   if(!m){scanSetStatus('⚠ Not a recognized BLC code: '+s,'mode-err');scanBeep(false);return;}
   var kind=m[1].toUpperCase(), val=m[2];
@@ -681,8 +700,47 @@ function scanFinishPacking(status){
   postScan({type:'orderField',orderId:o.id,field:'fulfillment',value:status});
   scanBeep(true);
   scanSetStatus('✅ '+o.customer+' — packed & '+status.toLowerCase(),'mode-ok');
-  document.getElementById('scanOrderChecklist').innerHTML='';
+  renderScanPackagingChooser(o);
+}
+function scanPackQtyElId_(sz){return 'scanPackQty_'+sz.replace(/[^a-zA-Z0-9]/g,'_');}
+/* Asks what size bag/box was used right after marking the order done —
+ * mirrors the in-app Scanner tab's packaging modal (openPackagingModal in
+ * Index.html) so Supplies still gets deducted correctly when packing is
+ * done from the standalone camera scanner instead of the desktop app. */
+function renderScanPackagingChooser(o){
+  var el=document.getElementById('scanOrderChecklist');
+  var h='<div style="margin:10px 0"><b>'+esc(o.customer)+'</b> — 📦 what size bag or box was used?</div>';
+  h+='<div class="scrollx">'+PACKAGE_SIZES.map(function(sz){
+    return '<div class="row" style="justify-content:space-between;margin-top:6px">'
+      +'<label>'+esc(sz)+'</label>'
+      +'<input type="number" min="0" step="1" style="width:70px" id="'+scanPackQtyElId_(sz)+'" value="0">'
+      +'</div>';
+  }).join('')+'</div>';
+  h+='<div class="row" style="margin-top:8px;gap:8px">'
+    +'<button class="btn small" onclick="scanSavePackaging(\''+o.id+'\')">Save</button>'
+    +'<button class="btn ghost small" onclick="scanSkipPackaging()">Skip</button>'
+    +'</div>';
+  el.innerHTML=h;
   scanPackPendingOrderId=null;scanPackPendingIds=null;
+}
+function scanSavePackaging(orderId){
+  var vals={};
+  PACKAGE_SIZES.forEach(function(sz){
+    var elx=document.getElementById(scanPackQtyElId_(sz));
+    var n=elx?parseInt(elx.value,10)||0:0;
+    if(n>0)vals[sz]=n;
+  });
+  var json=JSON.stringify(vals);
+  var o=DB.orders.find(function(x){return x.id===orderId;});
+  if(o)o.packaging=json;
+  postScan({type:'packaging',orderId:orderId,value:json});
+  scanBeep(true);
+  scanSetStatus('✅ Packaging saved — ready for the next order','mode-ok');
+  document.getElementById('scanOrderChecklist').innerHTML='';
+  setTimeout(scanRenderStatus,2500);
+}
+function scanSkipPackaging(){
+  document.getElementById('scanOrderChecklist').innerHTML='';
   setTimeout(scanRenderStatus,2500);
 }
 /* Per-process checklist — only lists the order's items that actually carry
