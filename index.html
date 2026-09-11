@@ -18,6 +18,7 @@
   .btn:active{opacity:0.8}
   .btn.ghost{background:transparent}
   .btn.small{padding:6px 10px;font-size:12px}
+  .btn.on{background:var(--blueline,#3af);border-color:var(--blueline,#3af);color:#fff}
   .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
   input{background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:14px}
   .scan-status{font-size:16px;font-weight:700;text-align:center;padding:12px;border-radius:9px;margin:10px 0;background:var(--panel2);border:1px solid var(--line)}
@@ -149,9 +150,12 @@ var scanMode=null;
 var scanStationName=null;
 var scanProcessKey=null;
 var scanBinLoc=null;
-var STATIONS=['Purchased','Receiving','Production','Packing','Shipping'];
-var STATION_ICON={Purchased:'💰',Receiving:'🚚',Production:'🖨',Packing:'📦',Shipping:'🚀'};
-var STATION_FLAG={Production:'produced',Packing:'packed'};
+/* "Production" as a generic station was retired Sept 2026 — the per-process
+ * QR stations (PROCESS_STATION_KEYS below) already filter to just that
+ * process's items, so they're the only way to scan production now. */
+var STATIONS=['Purchased','Receiving','Packing','Shipping'];
+var STATION_ICON={Purchased:'💰',Receiving:'🚚',Packing:'📦',Shipping:'🚀'};
+var STATION_FLAG={Packing:'packed'};
 var PACK_STAGES=['Needs Ordered','Purchased','Received','In Production','Packed'];
 /* Every real process EXCEPT Outsource and Shipping gets its own production QR
  * station (Sept 2026, mirrors PROCESS_STATION_KEYS in Index.html) — must stay
@@ -339,30 +343,73 @@ function scanOnProcess(key){
   scanBeep(true);
   scanRenderStatus();
 }
+/* An item counts as "received" once its receivingStatus is Received or
+ * Ignore — see setItemReceivingStatus in Code.gs. The old boolean
+ * "received" field is kept in sync by the backend, so this can just read it. */
+function itemReceived(i){return String(i.received)==='TRUE';}
 function scanOnOrder(orderId){
   if(scanMode==='process'&&scanProcessKey){
     var op=DB.orders.find(function(x){return x.id===orderId;});
     if(!op){scanSetStatus('⚠ Order not found: '+orderId+' — tap "Refresh data" if this order was just created.','mode-err');scanBeep(false);return;}
-    var matching=orderItems(op.id).filter(function(i){return itemProcs(i).indexOf(scanProcessKey)>-1;});
-    if(!matching.length){
+    var allMatching=orderItems(op.id).filter(function(i){return itemProcs(i).indexOf(scanProcessKey)>-1;});
+    if(!allMatching.length){
       scanSetStatus('❌ MISMATCH: '+op.customer+' has no '+procLabel(scanProcessKey)+' items — wrong QR or wrong order','mode-err');
       scanBeep(false);
       document.getElementById('scanOrderChecklist').innerHTML='';
       return;
     }
+    // Sequential gate: can't move to Production until Receiving is done for
+    // that item (Received or Ignore).
+    var matching=allMatching.filter(itemReceived);
+    if(!matching.length){
+      scanSetStatus('❌ Not received yet — scan these item(s) in at the Receiving station first','mode-err');
+      scanBeep(false);
+      document.getElementById('scanOrderChecklist').innerHTML='';
+      return;
+    }
     scanBeep(true);
-    scanSetStatus('📋 '+op.customer+' — check off '+procLabel(scanProcessKey)+' item(s) done','mode-station');
+    var notReceivedCount=allMatching.length-matching.length;
+    var notice=notReceivedCount?(' ('+notReceivedCount+' item(s) not shown — not yet received)'):'';
+    var stillOpen=matching.filter(function(i){return itemProcsDone(i).indexOf(scanProcessKey)===-1;});
+    if(stillOpen.length&&confirm('Are all '+stillOpen.length+' '+procLabel(scanProcessKey)+' item(s) on '+op.customer+'\'s order being produced right now?\n\n(Cancel to pick specific items instead.)')){
+      stillOpen.forEach(function(i){setProcessDone(i.id,op.id,scanProcessKey,true);});
+      scanSetStatus('✅ '+op.customer+' — all '+procLabel(scanProcessKey)+' item(s) marked done'+notice,'mode-ok');
+      document.getElementById('scanOrderChecklist').innerHTML='';
+      setTimeout(scanRenderStatus,2500);
+      return;
+    }
+    scanSetStatus('📋 '+op.customer+' — check off '+procLabel(scanProcessKey)+' item(s) done'+notice,'mode-station');
     renderScanProcessChecklist(op,scanProcessKey);
     return;
   }
   if(scanMode!=='station'||!scanStationName){
     scanSetStatus('⚠ Scan a station or process code first, then scan the order.','mode-err');scanBeep(false);return;
   }
-  if(scanStationName==='Receiving'){
-    scanSetStatus('⚠ Receiving orders are picked from the list below, not scanned.','mode-err');scanBeep(false);return;
-  }
   var o=DB.orders.find(function(x){return x.id===orderId;});
   if(!o){scanSetStatus('⚠ Order not found: '+orderId+' — tap "Refresh data" if this order was just created.','mode-err');scanBeep(false);return;}
+  if(scanStationName==='Receiving'){
+    var items=orderItems(o.id);
+    if(!items.length){scanSetStatus('No items on this order','mode-err');scanBeep(false);return;}
+    scanBeep(true);
+    scanSetStatus('📋 '+o.customer+' — mark each item Received/Awaiting/Missing/Ignore','mode-station');
+    renderScanReceivingChecklist(o);
+    return;
+  }
+  if(scanStationName==='Packing'){
+    var pitems=orderItems(o.id);
+    var notProduced=pitems.filter(function(i){return String(i.produced)!=='TRUE';});
+    var blocking=notProduced.filter(function(i){return String(i.bypass)!=='TRUE';});
+    if(blocking.length){
+      scanSetStatus('❌ Not through production yet: '+blocking.map(function(i){return i.style||i.description||'item';}).join(', '),'mode-err');
+      scanBeep(false);
+      return;
+    }
+    if(notProduced.length){
+      if(!confirm('⚠ '+notProduced.length+' item(s) are bypassed and not yet through production ('+notProduced.map(function(i){return i.style||i.description||'item';}).join(', ')+'). Pack anyway?')){
+        return;
+      }
+    }
+  }
   if(STATION_FLAG[scanStationName]){
     scanBeep(true);
     scanSetStatus('📋 '+o.customer+' — check off the item(s) done at '+scanStationName,'mode-station');
@@ -384,7 +431,10 @@ function applyStationToOrder(o,station){
     scanBeep(true);
     scanSetStatus('✅ '+o.customer+' — marked '+status,'mode-ok');
   }else{
-    var stageForStation={Purchased:'Purchased',Receiving:'Received',Production:'In Production',Packing:'Packed'};
+    // Only reached for Purchased now (from the picker) — Receiving uses the
+    // 4-state checklist below, and Packing/Production always go through a
+    // checklist too.
+    var stageForStation={Purchased:'Purchased'};
     var stage=stageForStation[station];
     var flags={
       'Needs Ordered':{purchased:false,received:false,produced:false,packed:false},
@@ -452,8 +502,43 @@ function purchasedPick(orderId){
 function receivingPick(orderId){
   var o=DB.orders.find(function(x){return x.id===orderId;});
   if(!o)return;
-  applyStationToOrder(o,'Receiving');
-  renderReceivingPicker();
+  scanSetStatus('📋 '+o.customer+' — mark each item Received/Awaiting/Missing/Ignore','mode-station');
+  renderScanReceivingChecklist(o);
+}
+/* ---- Receiving checklist: 4-state pick per item (Received/Awaiting/
+ * Missing/Ignore) instead of a plain checkbox — Ignore is for shipping/
+ * add-on lines that don't get received at all. Mirrors Index.html's version. */
+var RECEIVING_STATUSES=['Received','Awaiting','Missing','Ignore'];
+function itemReceivingStatus(i){return i.receivingStatus||'Awaiting';}
+function renderScanReceivingChecklist(o){
+  var items=orderItems(o.id);
+  var el=document.getElementById('scanOrderChecklist');
+  if(!items.length){el.innerHTML='<p class="muted" style="margin-top:10px">This order has no items.</p>';return;}
+  var counts={};RECEIVING_STATUSES.forEach(function(s){counts[s]=0;});
+  items.forEach(function(i){counts[itemReceivingStatus(i)]++;});
+  var summary=RECEIVING_STATUSES.map(function(s){return counts[s]+' '+s;}).join(' · ');
+  var h='<div style="margin:10px 0"><b>'+esc(o.customer)+'</b>'+(o.orderNumber?' · '+esc(o.orderNumber):'')+' — Receiving</div>';
+  h+='<div class="muted" style="margin-bottom:6px">'+summary+'</div>';
+  h+='<div class="scrollx"><table><tr><th>Style/Description</th><th>Color</th><th>Size</th><th>Qty</th><th>Status</th></tr>';
+  items.forEach(function(i){
+    var cur=itemReceivingStatus(i);
+    h+='<tr><td>'+esc(i.style)+(i.description?' — '+esc(i.description):'')+'</td><td>'+esc(i.color)+'</td><td>'+esc(i.size)+'</td><td>'+i.qty+'</td>'
+      +'<td><div class="row" style="gap:4px;flex-wrap:wrap">'+RECEIVING_STATUSES.map(function(s){
+        return '<button class="btn ghost small'+(s===cur?' on':'')+'" onclick="scanSetReceivingStatus(\''+i.id+'\',\''+o.id+'\',\''+s+'\')">'+s+'</button>';
+      }).join('')+'</div></td></tr>';
+  });
+  h+='</table></div><div class="row" style="margin-top:8px;justify-content:flex-end"><button class="btn ghost small" onclick="scanOrderChecklistClose()">Done</button></div>';
+  el.innerHTML=h;
+}
+function scanSetReceivingStatus(itemId,orderId,status){
+  var i=DB.items.find(function(x){return x.id===itemId;});
+  if(!i)return;
+  i.receivingStatus=status;
+  i.received=(status==='Received'||status==='Ignore')?'TRUE':'';
+  postScan({type:'receivingStatus',orderId:orderId,itemId:itemId,status:status});
+  scanBeep(true);
+  var o=DB.orders.find(function(x){return x.id===orderId;});
+  if(o)renderScanReceivingChecklist(o);
 }
 function procShort(k){var p=k.split(':');if(p[0]===p[1])return p[0];return p[0]==='Outsource'?'Out:'+p[1]:p[1]+(p[1]==='Sublimation'?'('+p[0][0]+')':'');}
 function itemProcs(i){return String(i.process||'').split(',').filter(function(x){return x;});}
@@ -514,15 +599,29 @@ function renderScanProcessChecklist(o,procKey){
   var h='<div style="margin:10px 0"><b>'+esc(o.customer)+'</b>'+(o.orderNumber?' · '+esc(o.orderNumber):'')+' — '+esc(procLabel(procKey))+'</div>';
   h+='<div class="row" style="margin-bottom:6px"><label style="display:flex;align-items:center;gap:6px;cursor:pointer">'
     +'<input type="checkbox" '+(allOn?'checked':'')+' onchange="scanToggleAllProcess(\''+o.id+'\',\''+procKey+'\',this.checked)"> <b>Select all</b></label></div>';
-  h+='<div class="scrollx"><table><tr><th></th><th>Style/Description</th><th>Color</th><th>Size</th><th>Qty</th><th>All processes</th></tr>';
+  h+='<div class="scrollx"><table><tr><th></th><th>Style/Description</th><th>Color</th><th>Size</th><th>Qty</th><th>All processes</th><th>Bypass</th></tr>';
   items.forEach(function(i){
     var on=itemProcsDone(i).indexOf(procKey)>-1;
+    var byp=String(i.bypass)==='TRUE';
     h+='<tr><td><input type="checkbox" '+(on?'checked':'')+' onchange="scanToggleProcessItem(\''+i.id+'\',\''+procKey+'\',this.checked,\''+o.id+'\')"></td>'
       +'<td>'+esc(i.style)+(i.description?' — '+esc(i.description):'')+'</td><td>'+esc(i.color)+'</td><td>'+esc(i.size)+'</td><td>'+i.qty+'</td>'
-      +'<td class="muted">'+itemProcs(i).map(procShort).join(', ')+'</td></tr>';
+      +'<td class="muted">'+itemProcs(i).map(procShort).join(', ')+'</td>'
+      +'<td><button class="btn ghost small'+(byp?' on':'')+'" title="Let Packing proceed without this item finishing production" onclick="scanToggleBypass(\''+i.id+'\',\''+o.id+'\',\''+procKey+'\','+(!byp)+')">'+(byp?'🚫 Bypassed':'Bypass')+'</button></td></tr>';
   });
   h+='</table></div><div class="row" style="margin-top:8px"><button class="btn ghost small" onclick="scanOrderChecklistClose()">Done</button></div>';
   el.innerHTML=h;
+}
+/* Lets Packing proceed on an item that isn't through production yet — the
+ * item is still expected to finish (see setItemBypass), this only stops it
+ * from blocking Packing, with a confirm warning shown at Packing scan time. */
+function scanToggleBypass(itemId,orderId,procKey,val){
+  var i=DB.items.find(function(x){return x.id===itemId;});
+  if(!i)return;
+  i.bypass=val?'TRUE':'';
+  postScan({type:'bypass',orderId:orderId,itemId:itemId,value:val});
+  scanBeep(true);
+  var o=DB.orders.find(function(x){return x.id===orderId;});
+  if(o)renderScanProcessChecklist(o,procKey);
 }
 function scanToggleProcessItem(itemId,procKey,val,orderId){
   setProcessDone(itemId,orderId,procKey,val);
