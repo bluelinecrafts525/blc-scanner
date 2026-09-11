@@ -76,6 +76,7 @@
 <div id="scanReceivingPicker"></div>
 <div id="scanOrderChecklist"></div>
 <div id="scanBinView"></div>
+<div id="scanThreadView"></div>
 
 <script>
 /* ============ config ============ */
@@ -101,7 +102,7 @@ function saveConfig(){
 }
 
 /* ============ data ============ */
-var DB={orders:[],items:[],inventory:[],supplies:[]};
+var DB={orders:[],items:[],inventory:[],supplies:[],threadSpools:[],threadColors:[],machines:[]};
 function orderItems(oid){return DB.items.filter(function(i){return i.orderId===oid;});}
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
 function setOffline(on){document.getElementById('offlineBanner').style.display=on?'block':'none';}
@@ -112,6 +113,7 @@ function loadData(manual){
     .then(function(r){return r.json();})
     .then(function(json){
       DB.orders=json.orders||[];DB.items=json.items||[];DB.inventory=json.inventory||[];DB.supplies=json.supplies||[];
+      DB.threadSpools=json.threadSpools||[];DB.threadColors=json.threadColors||[];DB.machines=json.machines||[];
       setOffline(false);
       scanRenderStatus();
       if(manual)scanBeep(true);
@@ -166,6 +168,7 @@ function scanReset(){
   document.getElementById('scanReceivingPicker').innerHTML='';
   document.getElementById('scanOrderChecklist').innerHTML='';
   document.getElementById('scanBinView').innerHTML='';
+  var tv=document.getElementById('scanThreadView'); if(tv)tv.innerHTML='';
   scanRenderStatus();
 }
 function startScanner(){
@@ -213,13 +216,68 @@ function scanBeep(ok){
 }
 function scanHandleCode(text){
   var s=String(text||'').trim();
-  var m=s.match(/^BLC:(ORDER|BIN|STATION|SUPPLY):(.+)$/i);
+  var m=s.match(/^BLC:(ORDER|BIN|STATION|SUPPLY|DRAWER):(.+)$/i);
   if(!m){scanSetStatus('⚠ Not a recognized BLC code: '+s,'mode-err');scanBeep(false);return;}
   var kind=m[1].toUpperCase(), val=m[2];
   if(kind==='STATION')return scanOnStation(val);
   if(kind==='BIN')return scanOnBin(val);
   if(kind==='ORDER')return scanOnOrder(val);
   if(kind==='SUPPLY')return scanOnSupply(val);
+  if(kind==='DRAWER')return scanOnDrawer(val);
+}
+function threadColorLookup(threadNumber){
+  var key=String(threadNumber||'').trim().toLowerCase();
+  var hit=(DB.threadColors||[]).find(function(c){return String(c.threadNumber||'').trim().toLowerCase()===key;});
+  return hit?{brand:hit.brand,colorName:hit.colorName}:null;
+}
+/* Mirrors the in-app Scanner tab's scanOnDrawer exactly (see Index.html) —
+ * Add asks for the thread number (auto-fills brand/color if it's already
+ * catalogued); Remove asks the thread number then which machine+needle
+ * it's going onto, which decrements the drawer and loads the needle in one
+ * step via the same removeThreadFromDrawer scanAction. */
+function scanOnDrawer(drawer){
+  scanBeep(true);
+  document.getElementById('scanReceivingPicker').innerHTML='';
+  document.getElementById('scanOrderChecklist').innerHTML='';
+  document.getElementById('scanBinView').innerHTML='';
+  scanSetStatus('🧵 Drawer: '+drawer,'mode-bin');
+  var mode=(prompt('Drawer "'+drawer+'" — Add or Remove a spool? (type A or R)')||'').trim().toLowerCase();
+  if(!mode)return;
+  if(mode.charAt(0)==='a'){
+    var num=(prompt('Thread number?')||'').trim();
+    if(!num)return;
+    var hit=threadColorLookup(num);
+    var brand=hit?hit.brand:'', color=hit?hit.colorName:'';
+    if(!hit){
+      brand=(prompt('Brand? (Madeira / Richword / Other)','Other')||'').trim();
+      color=(prompt('Color name?')||'').trim();
+    }
+    var qty=Number(prompt('How many spools?','1'))||1;
+    postScan({type:'threadAdd',drawer:drawer,brand:brand,threadNumber:num,color:color,qty:qty},function(res){
+      if(res&&res.ok!==false){
+        loadData();
+        scanSetStatus('✅ Added '+qty+' × '+num+' ('+color+') to '+drawer,'mode-ok');
+      }
+    });
+  } else if(mode.charAt(0)==='r'){
+    var num2=(prompt('Thread number to remove from '+drawer+'?')||'').trim();
+    if(!num2)return;
+    var row=(DB.threadSpools||[]).find(function(t){return t.locKind==='drawer'&&t.drawer===drawer&&String(t.threadNumber).toLowerCase()===num2.toLowerCase();});
+    if(!row){scanSetStatus('⚠ '+num2+' isn\'t logged in '+drawer,'mode-err');scanBeep(false);return;}
+    var machines=(DB.machines||[]).filter(function(m){return String(m.archived)!=='TRUE';});
+    var machine=machines.length>1
+      ? (prompt('Which machine?\n'+machines.map(function(m){return m.name;}).join(', '), machines[0].name)||'').trim()
+      : (machines[0]?machines[0].name:'Machine 1');
+    if(!machine)return;
+    var needle=Number(prompt('Which needle is it going on? (1-'+((machines.find(function(m){return m.name===machine;})||{}).needleCount||15)+')'));
+    if(!needle)return;
+    postScan({type:'threadRemove',drawer:drawer,brand:row.brand,threadNumber:row.threadNumber,machine:machine,needle:needle},function(res){
+      loadData();
+      scanSetStatus('✅ '+row.brand+' '+row.threadNumber+' → '+machine+' Needle '+needle,'mode-ok');
+    });
+  } else {
+    scanSetStatus('Type A to add or R to remove.','mode-err');
+  }
 }
 function scanOnSupply(id){
   var s=(DB.supplies||[]).find(function(x){return String(x.id)===String(id);});
