@@ -147,11 +147,17 @@ var scanHtml5Qrcode=null;
 var scanRunning=false;
 var scanMode=null;
 var scanStationName=null;
+var scanProcessKey=null;
 var scanBinLoc=null;
 var STATIONS=['Purchased','Receiving','Production','Packing','Shipping'];
 var STATION_ICON={Purchased:'💰',Receiving:'🚚',Production:'🖨',Packing:'📦',Shipping:'🚀'};
 var STATION_FLAG={Production:'produced',Packing:'packed'};
 var PACK_STAGES=['Needs Ordered','Purchased','Received','In Production','Packed'];
+/* Every real process EXCEPT Outsource and Shipping gets its own production QR
+ * station (Sept 2026, mirrors PROCESS_STATION_KEYS in Index.html) — must stay
+ * in sync with the canonical list in fixLegacyProcessTags() (Code.gs). */
+var PROCESS_STATION_KEYS=['Apparel:DTF','Apparel:Embroidery','Apparel:Sewing','Apparel:Sublimation','Apparel:Vinyl','Print:UV','Print:Paper','Print:Sublimation','Print:Cut Vinyl','Laser:Flat','Laser:Rotary','Labor:Labor'];
+function procLabel(k){var p=k.split(':');return p[0]===p[1]?p[0]:k.replace(':',' › ');}
 
 function scanSetStatus(msg,cls){
   var el=document.getElementById('scanStatus');
@@ -160,11 +166,12 @@ function scanSetStatus(msg,cls){
 }
 function scanRenderStatus(){
   if(scanMode==='station')scanSetStatus(STATION_ICON[scanStationName]+' Station: '+scanStationName+' — now scan (or type) an order\'s QR code','mode-station');
+  else if(scanMode==='process')scanSetStatus('🏭 Process: '+procLabel(scanProcessKey)+' — now scan (or type) an order\'s QR code','mode-station');
   else if(scanMode==='bin')scanSetStatus('📍 Bin: '+scanBinLoc,'mode-bin');
-  else scanSetStatus('Scan a station or bin code to begin.');
+  else scanSetStatus('Scan a station, process, or bin code to begin.');
 }
 function scanReset(){
-  scanMode=null;scanStationName=null;scanBinLoc=null;
+  scanMode=null;scanStationName=null;scanProcessKey=null;scanBinLoc=null;
   document.getElementById('scanReceivingPicker').innerHTML='';
   document.getElementById('scanOrderChecklist').innerHTML='';
   document.getElementById('scanBinView').innerHTML='';
@@ -216,10 +223,11 @@ function scanBeep(ok){
 }
 function scanHandleCode(text){
   var s=String(text||'').trim();
-  var m=s.match(/^BLC:(ORDER|BIN|STATION|SUPPLY|DRAWER):(.+)$/i);
+  var m=s.match(/^BLC:(ORDER|BIN|STATION|PROC|SUPPLY|DRAWER):(.+)$/i);
   if(!m){scanSetStatus('⚠ Not a recognized BLC code: '+s,'mode-err');scanBeep(false);return;}
   var kind=m[1].toUpperCase(), val=m[2];
   if(kind==='STATION')return scanOnStation(val);
+  if(kind==='PROC')return scanOnProcess(val);
   if(kind==='BIN')return scanOnBin(val);
   if(kind==='ORDER')return scanOnOrder(val);
   if(kind==='SUPPLY')return scanOnSupply(val);
@@ -317,9 +325,38 @@ function scanOnBin(loc){
   scanRenderStatus();
   renderScanBinView();
 }
+/* Per-process production station (Sept 2026, mirrors Index.html) — scan one
+ * of the 12 process cards, then scan an order: if none of its items carry
+ * that process, it's a mismatch warning instead of silently proceeding. */
+function scanOnProcess(key){
+  var k=String(key||'').trim();
+  var match=PROCESS_STATION_KEYS.find(function(x){return x===k;});
+  if(!match){scanSetStatus('⚠ Unknown process code: '+key,'mode-err');scanBeep(false);return;}
+  scanMode='process';scanProcessKey=match;scanStationName=null;scanBinLoc=null;
+  document.getElementById('scanReceivingPicker').innerHTML='';
+  document.getElementById('scanBinView').innerHTML='';
+  document.getElementById('scanOrderChecklist').innerHTML='';
+  scanBeep(true);
+  scanRenderStatus();
+}
 function scanOnOrder(orderId){
+  if(scanMode==='process'&&scanProcessKey){
+    var op=DB.orders.find(function(x){return x.id===orderId;});
+    if(!op){scanSetStatus('⚠ Order not found: '+orderId+' — tap "Refresh data" if this order was just created.','mode-err');scanBeep(false);return;}
+    var matching=orderItems(op.id).filter(function(i){return itemProcs(i).indexOf(scanProcessKey)>-1;});
+    if(!matching.length){
+      scanSetStatus('❌ MISMATCH: '+op.customer+' has no '+procLabel(scanProcessKey)+' items — wrong QR or wrong order','mode-err');
+      scanBeep(false);
+      document.getElementById('scanOrderChecklist').innerHTML='';
+      return;
+    }
+    scanBeep(true);
+    scanSetStatus('📋 '+op.customer+' — check off '+procLabel(scanProcessKey)+' item(s) done','mode-station');
+    renderScanProcessChecklist(op,scanProcessKey);
+    return;
+  }
   if(scanMode!=='station'||!scanStationName){
-    scanSetStatus('⚠ Scan a station code first, then scan the order.','mode-err');scanBeep(false);return;
+    scanSetStatus('⚠ Scan a station or process code first, then scan the order.','mode-err');scanBeep(false);return;
   }
   if(scanStationName==='Receiving'){
     scanSetStatus('⚠ Receiving orders are picked from the list below, not scanned.','mode-err');scanBeep(false);return;
@@ -420,6 +457,7 @@ function receivingPick(orderId){
 }
 function procShort(k){var p=k.split(':');if(p[0]===p[1])return p[0];return p[0]==='Outsource'?'Out:'+p[1]:p[1]+(p[1]==='Sublimation'?'('+p[0][0]+')':'');}
 function itemProcs(i){return String(i.process||'').split(',').filter(function(x){return x;});}
+function itemProcsDone(i){return String(i.processDone||'').split(',').filter(function(x){return x;});}
 function renderScanOrderChecklist(o,station){
   var flag=STATION_FLAG[station];
   var items=orderItems(o.id);
@@ -464,6 +502,54 @@ function scanToggleAllItems(orderId,station,val){
 function scanOrderChecklistClose(){
   document.getElementById('scanOrderChecklist').innerHTML='';
   scanRenderStatus();
+}
+/* Per-process checklist — only lists the order's items that actually carry
+ * that process (mirrors renderScanOrderChecklist but keyed on a process tag
+ * instead of a station flag; see setProcessDone). */
+function renderScanProcessChecklist(o,procKey){
+  var items=orderItems(o.id).filter(function(i){return itemProcs(i).indexOf(procKey)>-1;});
+  var el=document.getElementById('scanOrderChecklist');
+  if(!items.length){el.innerHTML='<p class="muted" style="margin-top:10px">This order has no '+procLabel(procKey)+' items.</p>';return;}
+  var allOn=items.every(function(i){return itemProcsDone(i).indexOf(procKey)>-1;});
+  var h='<div style="margin:10px 0"><b>'+esc(o.customer)+'</b>'+(o.orderNumber?' · '+esc(o.orderNumber):'')+' — '+esc(procLabel(procKey))+'</div>';
+  h+='<div class="row" style="margin-bottom:6px"><label style="display:flex;align-items:center;gap:6px;cursor:pointer">'
+    +'<input type="checkbox" '+(allOn?'checked':'')+' onchange="scanToggleAllProcess(\''+o.id+'\',\''+procKey+'\',this.checked)"> <b>Select all</b></label></div>';
+  h+='<div class="scrollx"><table><tr><th></th><th>Style/Description</th><th>Color</th><th>Size</th><th>Qty</th><th>All processes</th></tr>';
+  items.forEach(function(i){
+    var on=itemProcsDone(i).indexOf(procKey)>-1;
+    h+='<tr><td><input type="checkbox" '+(on?'checked':'')+' onchange="scanToggleProcessItem(\''+i.id+'\',\''+procKey+'\',this.checked,\''+o.id+'\')"></td>'
+      +'<td>'+esc(i.style)+(i.description?' — '+esc(i.description):'')+'</td><td>'+esc(i.color)+'</td><td>'+esc(i.size)+'</td><td>'+i.qty+'</td>'
+      +'<td class="muted">'+itemProcs(i).map(procShort).join(', ')+'</td></tr>';
+  });
+  h+='</table></div><div class="row" style="margin-top:8px"><button class="btn ghost small" onclick="scanOrderChecklistClose()">Done</button></div>';
+  el.innerHTML=h;
+}
+function scanToggleProcessItem(itemId,procKey,val,orderId){
+  setProcessDone(itemId,orderId,procKey,val);
+  scanBeep(true);
+  var o=DB.orders.find(function(x){return x.id===orderId;});
+  if(o)renderScanProcessChecklist(o,procKey);
+}
+function scanToggleAllProcess(orderId,procKey,val){
+  orderItems(orderId).filter(function(i){return itemProcs(i).indexOf(procKey)>-1;}).forEach(function(i){setProcessDone(i.id,orderId,procKey,val);});
+  scanBeep(true);
+  var o=DB.orders.find(function(x){return x.id===orderId;});
+  if(o)renderScanProcessChecklist(o,procKey);
+}
+/* Marks one process done/not-done on one item — optimistic local update +
+ * a postScan('processDone') call (see handleScanAction_ in Code.gs), which
+ * also flips "produced" TRUE once every process tag the item has is done. */
+function setProcessDone(itemId,orderId,procKey,val){
+  var i=DB.items.find(function(x){return x.id===itemId;});
+  if(!i)return;
+  var done=itemProcsDone(i);
+  if(val){if(done.indexOf(procKey)===-1)done.push(procKey);}
+  else{done=done.filter(function(p){return p!==procKey;});}
+  i.processDone=done.join(',');
+  var procs=itemProcs(i);
+  var allDone=procs.length>0&&procs.every(function(p){return done.indexOf(p)>-1;});
+  i.produced=allDone?'TRUE':'';
+  postScan({type:'processDone',orderId:orderId,itemId:itemId,processKey:procKey,value:val});
 }
 function renderScanBinView(){
   var el=document.getElementById('scanBinView');
