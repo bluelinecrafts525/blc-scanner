@@ -416,6 +416,9 @@ function scanOnOrder(orderId){
         return;
       }
     }
+    scanBeep(true);
+    scanPackingFlow(o);
+    return;
   }
   if(STATION_FLAG[scanStationName]){
     scanBeep(true);
@@ -593,7 +596,94 @@ function scanToggleAllItems(orderId,station,val){
 }
 function scanOrderChecklistClose(){
   document.getElementById('scanOrderChecklist').innerHTML='';
+  scanPackSelectedIds=null;scanPackPendingOrderId=null;scanPackPendingIds=null;
   scanRenderStatus();
+}
+/* ---- Packing scan wizard (Sept 2026, mirrors Index.html) — labels print
+ * once at order intake now and travel with the order, so packing no longer
+ * pops a label modal; instead it walks straight to marking the order done
+ * (Delivered/Shipped/Picked Up) right from the scan. */
+function scanPackingFlow(o){
+  if(confirm('📦 '+o.customer+' — is everything ready to be packed?')){
+    renderScanPackMethodChoice(o,orderItems(o.id).map(function(i){return i.id;}));
+    return;
+  }
+  if(!confirm('Are all items included in this pack?')){
+    renderScanPackSelectChecklist(o);
+    return;
+  }
+  scanSetStatus('Not ready yet — come back once everything is set to pack.','mode-err');
+  document.getElementById('scanOrderChecklist').innerHTML='';
+}
+var scanPackSelectedIds=null;
+function renderScanPackSelectChecklist(o){
+  var items=orderItems(o.id);
+  var el=document.getElementById('scanOrderChecklist');
+  if(!items.length){el.innerHTML='<p class="muted" style="margin-top:10px">This order has no items.</p>';return;}
+  if(!scanPackSelectedIds)scanPackSelectedIds=items.map(function(i){return i.id;});
+  var h='<div style="margin:10px 0"><b>'+esc(o.customer)+'</b>'+(o.orderNumber?' · '+esc(o.orderNumber):'')+' — which items are you packing now?</div>';
+  h+='<div class="scrollx"><table><tr><th></th><th>Style/Description</th><th>Color</th><th>Size</th><th>Qty</th></tr>';
+  items.forEach(function(i){
+    var on=scanPackSelectedIds.indexOf(i.id)>-1;
+    h+='<tr><td><input type="checkbox" '+(on?'checked':'')+' onchange="scanTogglePackSelect(\''+i.id+'\',this.checked)"></td>'
+      +'<td>'+esc(i.style)+(i.description?' — '+esc(i.description):'')+'</td><td>'+esc(i.color)+'</td><td>'+esc(i.size)+'</td><td>'+i.qty+'</td></tr>';
+  });
+  h+='</table></div><div class="row" style="margin-top:8px;justify-content:flex-end"><button class="btn small" onclick="scanPackSelectContinue(\''+o.id+'\')">Continue</button></div>';
+  el.innerHTML=h;
+}
+function scanTogglePackSelect(itemId,val){
+  if(!scanPackSelectedIds)return;
+  if(val){if(scanPackSelectedIds.indexOf(itemId)===-1)scanPackSelectedIds.push(itemId);}
+  else{scanPackSelectedIds=scanPackSelectedIds.filter(function(x){return x!==itemId;});}
+}
+function scanPackSelectContinue(orderId){
+  var o=DB.orders.find(function(x){return x.id===orderId;});
+  if(!o)return;
+  var ids=scanPackSelectedIds||[];
+  if(!ids.length){scanSetStatus('Select at least one item','mode-err');return;}
+  var separately=confirm('Are these items being packed and shipped separately from the rest of the order?\n\nOK = yes, separately\nCancel = no, staying together — waiting on the other items');
+  scanPackSelectedIds=null;
+  if(separately){
+    renderScanPackMethodChoice(o,ids);
+  }else{
+    scanBeep(true);
+    scanSetStatus('📝 Noted — please proceed with next order.','mode-ok');
+    document.getElementById('scanOrderChecklist').innerHTML='';
+    setTimeout(scanRenderStatus,2500);
+  }
+}
+var scanPackPendingOrderId=null, scanPackPendingIds=null;
+function renderScanPackMethodChoice(o,itemIds){
+  scanPackPendingOrderId=o.id;scanPackPendingIds=itemIds;
+  var whole=itemIds.length===orderItems(o.id).length;
+  var el=document.getElementById('scanOrderChecklist');
+  var h='<div style="margin:10px 0"><b>'+esc(o.customer)+'</b>'+(o.orderNumber?' · '+esc(o.orderNumber):'')+' — mark '+(whole?'this order':itemIds.length+' item(s)')+' as:</div>';
+  h+='<div class="row" style="gap:8px;flex-wrap:wrap">'
+    +'<button class="btn small" onclick="scanFinishPacking(\'Delivered\')">📬 Packed &amp; Delivered</button>'
+    +'<button class="btn small" onclick="scanFinishPacking(\'Shipped\')">🚚 Packed &amp; Shipped</button>'
+    +'<button class="btn small" onclick="scanFinishPacking(\'Picked Up\')">🏃 Packed &amp; Picked Up</button>'
+    +'</div><div class="row" style="margin-top:8px"><button class="btn ghost small" onclick="scanOrderChecklistClose()">Cancel</button></div>';
+  el.innerHTML=h;
+}
+/* Marks the pending item(s) packed and the order's fulfillment straight to
+ * the done status in one step (postScan for each) — Code.gs's stampDoneAt_
+ * auto-archives it from there. */
+function scanFinishPacking(status){
+  var o=DB.orders.find(function(x){return x.id===scanPackPendingOrderId;});
+  if(!o){scanOrderChecklistClose();return;}
+  var ids=scanPackPendingIds||[];
+  var items=DB.items.filter(function(i){return ids.indexOf(i.id)>-1;});
+  items.forEach(function(i){
+    i.packed='TRUE';
+    postScan({type:'itemFlag',itemId:i.id,field:'packed',value:true});
+  });
+  o.fulfillment=status;
+  postScan({type:'orderField',orderId:o.id,field:'fulfillment',value:status});
+  scanBeep(true);
+  scanSetStatus('✅ '+o.customer+' — packed & '+status.toLowerCase(),'mode-ok');
+  document.getElementById('scanOrderChecklist').innerHTML='';
+  scanPackPendingOrderId=null;scanPackPendingIds=null;
+  setTimeout(scanRenderStatus,2500);
 }
 /* Per-process checklist — only lists the order's items that actually carry
  * that process (mirrors renderScanOrderChecklist but keyed on a process tag
