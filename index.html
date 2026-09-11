@@ -225,6 +225,13 @@ function scanBeep(ok){
   }catch(e){}
   if(navigator.vibrate)navigator.vibrate(ok?60:[80,60,80]);
 }
+/* QR order labels encode orderNumber when the order has one, falling back to
+ * the internal id only if it doesn't (see the 4x6 label's BLC:ORDER: code in
+ * Index.html) — so every scan lookup must check both, or any order with an
+ * orderNumber never matches its own QR code. */
+function findOrderByScan_(scannedId){
+  return DB.orders.find(function(x){return x.id===scannedId||String(x.orderNumber||'')===String(scannedId);});
+}
 function scanHandleCode(text){
   var s=String(text||'').trim();
   var m=s.match(/^BLC:(ORDER|BIN|STATION|PROC|SUPPLY|DRAWER):(.+)$/i);
@@ -349,7 +356,7 @@ function scanOnProcess(key){
 function itemReceived(i){return String(i.received)==='TRUE';}
 function scanOnOrder(orderId){
   if(scanMode==='process'&&scanProcessKey){
-    var op=DB.orders.find(function(x){return x.id===orderId;});
+    var op=findOrderByScan_(orderId);
     if(!op){scanSetStatus('⚠ Order not found: '+orderId+' — tap "Refresh data" if this order was just created.','mode-err');scanBeep(false);return;}
     var allMatching=orderItems(op.id).filter(function(i){return itemProcs(i).indexOf(scanProcessKey)>-1;});
     if(!allMatching.length){
@@ -385,7 +392,7 @@ function scanOnOrder(orderId){
   if(scanMode!=='station'||!scanStationName){
     scanSetStatus('⚠ Scan a station or process code first, then scan the order.','mode-err');scanBeep(false);return;
   }
-  var o=DB.orders.find(function(x){return x.id===orderId;});
+  var o=findOrderByScan_(orderId);
   if(!o){scanSetStatus('⚠ Order not found: '+orderId+' — tap "Refresh data" if this order was just created.','mode-err');scanBeep(false);return;}
   if(scanStationName==='Receiving'){
     var items=orderItems(o.id);
@@ -494,13 +501,13 @@ function renderPurchasedPicker(){
   el.innerHTML=h;
 }
 function purchasedPick(orderId){
-  var o=DB.orders.find(function(x){return x.id===orderId;});
+  var o=findOrderByScan_(orderId);
   if(!o)return;
   applyStationToOrder(o,'Purchased');
   renderPurchasedPicker();
 }
 function receivingPick(orderId){
-  var o=DB.orders.find(function(x){return x.id===orderId;});
+  var o=findOrderByScan_(orderId);
   if(!o)return;
   scanSetStatus('📋 '+o.customer+' — mark each item Received/Awaiting/Missing/Ignore','mode-station');
   renderScanReceivingChecklist(o);
@@ -537,7 +544,7 @@ function scanSetReceivingStatus(itemId,orderId,status){
   i.received=(status==='Received'||status==='Ignore')?'TRUE':'';
   postScan({type:'receivingStatus',orderId:orderId,itemId:itemId,status:status});
   scanBeep(true);
-  var o=DB.orders.find(function(x){return x.id===orderId;});
+  var o=findOrderByScan_(orderId);
   if(o)renderScanReceivingChecklist(o);
 }
 function procShort(k){var p=k.split(':');if(p[0]===p[1])return p[0];return p[0]==='Outsource'?'Out:'+p[1]:p[1]+(p[1]==='Sublimation'?'('+p[0][0]+')':'');}
@@ -571,7 +578,7 @@ function scanToggleItem(itemId,flag,val,orderId,station){
   }
   postScan({type:'itemFlag',itemId:itemId,field:flag,value:val});
   scanBeep(true);
-  var o=DB.orders.find(function(x){return x.id===orderId;});
+  var o=findOrderByScan_(orderId);
   if(o)renderScanOrderChecklist(o,station);
 }
 function scanToggleAllItems(orderId,station,val){
@@ -581,7 +588,7 @@ function scanToggleAllItems(orderId,station,val){
     postScan({type:'itemFlag',itemId:i.id,field:flag,value:val});
   });
   scanBeep(true);
-  var o=DB.orders.find(function(x){return x.id===orderId;});
+  var o=findOrderByScan_(orderId);
   if(o)renderScanOrderChecklist(o,station);
 }
 function scanOrderChecklistClose(){
@@ -620,19 +627,19 @@ function scanToggleBypass(itemId,orderId,procKey,val){
   i.bypass=val?'TRUE':'';
   postScan({type:'bypass',orderId:orderId,itemId:itemId,value:val});
   scanBeep(true);
-  var o=DB.orders.find(function(x){return x.id===orderId;});
+  var o=findOrderByScan_(orderId);
   if(o)renderScanProcessChecklist(o,procKey);
 }
 function scanToggleProcessItem(itemId,procKey,val,orderId){
   setProcessDone(itemId,orderId,procKey,val);
   scanBeep(true);
-  var o=DB.orders.find(function(x){return x.id===orderId;});
+  var o=findOrderByScan_(orderId);
   if(o)renderScanProcessChecklist(o,procKey);
 }
 function scanToggleAllProcess(orderId,procKey,val){
   orderItems(orderId).filter(function(i){return itemProcs(i).indexOf(procKey)>-1;}).forEach(function(i){setProcessDone(i.id,orderId,procKey,val);});
   scanBeep(true);
-  var o=DB.orders.find(function(x){return x.id===orderId;});
+  var o=findOrderByScan_(orderId);
   if(o)renderScanProcessChecklist(o,procKey);
 }
 /* Marks one process done/not-done on one item — optimistic local update +
