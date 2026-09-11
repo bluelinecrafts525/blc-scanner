@@ -162,6 +162,19 @@ function scanPrompt(msg,defVal){
     inp.onkeydown=function(e){if(e.key==='Enter'){e.preventDefault();done(inp.value);}};
   });
 }
+/* Bob wants a checkpoint before an item goes Purchased -> Received any way
+ * OTHER than through PO Check-in (which only runs on the desktop app), but
+ * only for the vendors he actually reconciles against a packing slip:
+ * SanMar and S&S Activewear. Mirrors the same helper in Index.html. */
+var PO_CHECKIN_VENDOR_KEYS_=['sanmar','ssactivewear'];
+function poCheckinVendorKey_(v){return String(v||'').toLowerCase().replace(/[^a-z0-9]/g,'');}
+function isPOCheckinVendor_(vendor){return PO_CHECKIN_VENDOR_KEYS_.indexOf(poCheckinVendorKey_(vendor))>-1;}
+async function confirmManualReceive_(items){
+  var flagged=(items||[]).filter(function(i){return isPOCheckinVendor_(i.vendor);});
+  if(!flagged.length)return true;
+  var names=flagged.slice(0,4).map(function(i){return i.style||i.description||'item';}).join(', ')+(flagged.length>4?', +'+(flagged.length-4)+' more':'');
+  return await scanConfirm('⚠ '+flagged.length+' item(s) ('+names+') are from '+flagged[0].vendor+' — these should be checked in through PO Check-in on the desktop app instead of marked Received here, so a short or wrong shipment gets caught.\n\nMark Received anyway?');
+}
 function loadData(manual){
   if(!CFG.base||!CFG.token){showConfig();return;}
   scanSetStatus('Loading tracker data…');
@@ -614,9 +627,10 @@ function renderScanReceivingChecklist(o){
   h+='</table></div><div class="row" style="margin-top:8px;justify-content:flex-end"><button class="btn ghost small" onclick="scanOrderChecklistClose()">Done</button></div>';
   el.innerHTML=h;
 }
-function scanSetReceivingStatus(itemId,orderId,status){
+async function scanSetReceivingStatus(itemId,orderId,status){
   var i=DB.items.find(function(x){return x.id===itemId;});
   if(!i)return;
+  if(status==='Received'&&String(i.received)!=='TRUE'&&!await confirmManualReceive_([i]))return;
   i.receivingStatus=status;
   i.received=(status==='Received'||status==='Ignore')?'TRUE':'';
   postScan({type:'receivingStatus',orderId:orderId,itemId:itemId,status:status});
