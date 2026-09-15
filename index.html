@@ -292,6 +292,31 @@ function stopScanner(){
     document.getElementById('scanStopBtn').style.display='none';
   }).catch(function(){scanRunning=false;});
 }
+/* iOS Safari can silently kill the live camera track — screen auto-lock,
+ * switching apps for a second, even just the phone dimming while Bob's
+ * hands are full mid-pack — without telling html5-qrcode. The <video>
+ * element is left showing its last frame forever ("frozen"), and nothing
+ * here was ever restarting it. Whenever the tab becomes visible again,
+ * check the underlying video track's readyState and force a restart if it's
+ * not actually live anymore, so the NEXT scan just works instead of Bob
+ * having to notice, tap Stop, then Start again by hand. */
+function scanRestartIfFrozen_(){
+  if(!scanRunning)return;
+  var live=false;
+  try{
+    var videoEl=document.querySelector('#scanRegion video');
+    var track=videoEl&&videoEl.srcObject&&videoEl.srcObject.getVideoTracks&&videoEl.srcObject.getVideoTracks()[0];
+    live=!!(track&&track.readyState==='live'&&!track.muted);
+  }catch(e){}
+  if(live)return;
+  var restart=function(){scanRunning=false;startScanner();};
+  if(scanHtml5Qrcode)scanHtml5Qrcode.stop().then(function(){scanHtml5Qrcode.clear();restart();}).catch(restart);
+  else restart();
+}
+document.addEventListener('visibilitychange',function(){
+  if(document.visibilityState==='visible')setTimeout(scanRestartIfFrozen_,300);
+});
+window.addEventListener('pageshow',function(){setTimeout(scanRestartIfFrozen_,300);});
 function scanManualGo(){
   var el=document.getElementById('scanManualInput');
   var v=el.value.trim();
@@ -299,13 +324,24 @@ function scanManualGo(){
   el.value='';
   scanHandleCode(v);
 }
+// One shared AudioContext, reused for every beep. A full order-completion
+// flow fires scanBeep 5-8+ times (station scan, order scan, checklist
+// actions, confirms, packaging save), and this used to create a brand-new
+// AudioContext for every single one and never close it. iOS Safari caps how
+// many can be alive at once — after enough scans in a row (which lines up
+// with "freezes after completing an order") new contexts start failing to
+// initialize, and on some iOS versions that hang bleeds into the page's main
+// thread and can leave the camera video looking frozen too. Reusing one
+// context removes the leak entirely.
+var scanAudioCtx_=null;
 function scanBeep(ok){
   try{
-    var ctx=new (window.AudioContext||window.webkitAudioContext)();
-    var o=ctx.createOscillator(),g=ctx.createGain();
-    o.frequency.value=ok?880:220; o.connect(g); g.connect(ctx.destination);
-    g.gain.setValueAtTime(0.15,ctx.currentTime);
-    o.start(); o.stop(ctx.currentTime+0.12);
+    if(!scanAudioCtx_)scanAudioCtx_=new (window.AudioContext||window.webkitAudioContext)();
+    if(scanAudioCtx_.state==='suspended')scanAudioCtx_.resume();
+    var o=scanAudioCtx_.createOscillator(),g=scanAudioCtx_.createGain();
+    o.frequency.value=ok?880:220; o.connect(g); g.connect(scanAudioCtx_.destination);
+    g.gain.setValueAtTime(0.15,scanAudioCtx_.currentTime);
+    o.start(); o.stop(scanAudioCtx_.currentTime+0.12);
   }catch(e){}
   if(navigator.vibrate)navigator.vibrate(ok?60:[80,60,80]);
 }
