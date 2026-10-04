@@ -19,6 +19,7 @@
   .btn.ghost{background:transparent}
   .btn.small{padding:6px 10px;font-size:12px}
   .btn.on{background:var(--blueline,#3af);border-color:var(--blueline,#3af);color:#fff}
+  .btn.big{width:100%;padding:16px;font-size:17px;font-weight:700;background:var(--blue);border-color:var(--blue);color:#fff}
   .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
   input{background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:14px}
   .scan-status{font-size:16px;font-weight:700;text-align:center;padding:12px;border-radius:9px;margin:10px 0;background:var(--panel2);border:1px solid var(--line)}
@@ -39,6 +40,8 @@
   .cfg{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:14px}
   .cfg label{display:block;font-size:12px;color:var(--dim);margin-bottom:3px}
   .cfg input{width:100%;margin-bottom:8px}
+  .photo-card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;margin:12px 0}
+  .photo-card img{width:100%;border-radius:8px;margin:10px 0;display:block}
   /* Custom confirm/prompt overlay — replaces window.confirm/prompt so the
    * camera stream never has to sit behind a blocking native browser dialog
    * (iOS Safari in particular can leave the html5-qrcode video feed frozen
@@ -73,8 +76,13 @@
   <button class="btn ghost small" onclick="loadData(true)">⟳ Refresh data</button>
   <button class="btn ghost small" onclick="showConfig()">⚙ Change setup</button>
 </div>
+<div class="row" style="margin-bottom:8px">
+  <button class="btn small" onclick="showDeliveryPhotoList()">📷 Delivery photo</button>
+</div>
 
 <div id="scanStatus" class="scan-status">Loading tracker data…</div>
+
+<div id="photoPanel"></div>
 
 <div id="scanRegion"></div>
 
@@ -87,6 +95,8 @@
 <div id="scanOrderChecklist"></div>
 <div id="scanBinView"></div>
 <div id="scanThreadView"></div>
+
+<input type="file" id="photoInput" accept="image/*" capture="environment" style="display:none" onchange="photoPicked(this)">
 
 <div id="scanDialogOverlay">
   <div id="scanDialogBox">
@@ -175,6 +185,7 @@ async function confirmManualReceive_(items){
   var names=flagged.slice(0,4).map(function(i){return i.style||i.description||'item';}).join(', ')+(flagged.length>4?', +'+(flagged.length-4)+' more':'');
   return await scanConfirm('⚠ '+flagged.length+' item(s) ('+names+') are from '+flagged[0].vendor+' — these should be checked in through PO Check-in on the desktop app instead of marked Received here, so a short or wrong shipment gets caught.\n\nMark Received anyway?');
 }
+var dataLoadedOnce_=false;
 function loadData(manual){
   if(!CFG.base||!CFG.token){showConfig();return;}
   scanSetStatus('Loading tracker data…');
@@ -186,6 +197,7 @@ function loadData(manual){
       setOffline(false);
       scanRenderStatus();
       if(manual)scanBeep(true);
+      if(!dataLoadedOnce_){dataLoadedOnce_=true;openPhotoFromUrl_();}
     })
     .catch(function(err){
       setOffline(true);
@@ -208,6 +220,7 @@ function postScan(action,onDone){
     setOffline(true);
     scanSetStatus('⚠ Could not reach the tracker to save that — try again.','mode-err');
     scanBeep(false);
+    if(onDone)onDone({ok:false,error:'network'});
   });
 }
 
@@ -235,12 +248,18 @@ var STATIONS=['Purchased','Receiving','Packing','Shipping'];
 var STATION_ICON={Purchased:'💰',Receiving:'🚚',Packing:'📦',Shipping:'🚀'};
 var STATION_FLAG={Packing:'packed'};
 var PACK_STAGES=['Needs Ordered','Purchased','Received','In Production','Packed'];
-/* Mirrors Index.html's PACKAGE_SIZES exactly — the packing wizard here asks
- * which bag/box size(s) were used right after marking an order done, same
- * as the in-app Scanner tab's packaging modal (openPackagingModal), so
- * Supplies stays accurate whether Bob packs from the desktop app or the
- * standalone camera scanner. */
-var PACKAGE_SIZES=['9x12 Poly Bag','10x13 Poly Bag','12x15 Poly Bag','14x19 Poly Bag','17x22 Poly Bag','19x19 Poly Bag','24x24 Poly Bag','Small Box','Medium Box','Large Box','XL Box'];
+/* Packaging sizes for the packing wizard — poly bag sizes come straight from
+ * the tracker's Supplies tab (category "Poly Bag"), same as the desktop
+ * app's packageSizes(), so renaming/adding a bag size there (e.g. the
+ * 24x24 -> 19x24 switch) shows up here too and the right supply actually
+ * gets deducted. Boxes aren't stock-tracked, so they stay a fixed list. */
+var PACKAGE_BOX_SIZES=['Small Box','Medium Box','Large Box','XL Box'];
+var PACKAGE_SIZES=[];
+function packageSizes_(){
+  var bags=(DB.supplies||[]).filter(function(s){return s.category==='Poly Bag';}).map(function(s){return s.item;});
+  if(!bags.length)bags=['9x12 Poly Bag','10x13 Poly Bag','12x15 Poly Bag','14x19 Poly Bag','17x22 Poly Bag','19x19 Poly Bag','19x24 Poly Bag'];
+  return bags.concat(PACKAGE_BOX_SIZES);
+}
 /* Every real process EXCEPT Outsource and Shipping gets its own production QR
  * station (Sept 2026, mirrors PROCESS_STATION_KEYS in Index.html) — must stay
  * in sync with the canonical list in fixLegacyProcessTags() (Code.gs). */
@@ -256,7 +275,7 @@ function scanRenderStatus(){
   if(scanMode==='station')scanSetStatus(STATION_ICON[scanStationName]+' Station: '+scanStationName+' — now scan (or type) an order\'s QR code','mode-station');
   else if(scanMode==='process')scanSetStatus('🏭 Process: '+procLabel(scanProcessKey)+' — now scan (or type) an order\'s QR code','mode-station');
   else if(scanMode==='bin')scanSetStatus('📍 Bin: '+scanBinLoc,'mode-bin');
-  else scanSetStatus('Scan a station, process, or bin code to begin.');
+  else scanSetStatus('Scan a station, process, or bin code to begin — or scan a Local Delivery order\'s label to take its drop-off photo.');
 }
 function scanReset(){
   scanMode=null;scanStationName=null;scanProcessKey=null;scanBinLoc=null;
@@ -264,6 +283,7 @@ function scanReset(){
   document.getElementById('scanOrderChecklist').innerHTML='';
   document.getElementById('scanBinView').innerHTML='';
   var tv=document.getElementById('scanThreadView'); if(tv)tv.innerHTML='';
+  closePhotoPanel();
   scanRenderStatus();
 }
 function startScanner(){
@@ -283,9 +303,11 @@ function startScanner(){
     alert('Could not start camera: '+(err&&err.message?err.message:err));
   });
 }
+/* Returns a promise so the delivery-photo flow can wait for the QR camera
+ * to fully let go before the phone's own camera opens. */
 function stopScanner(){
-  if(!scanRunning||!scanHtml5Qrcode)return;
-  scanHtml5Qrcode.stop().then(function(){
+  if(!scanRunning||!scanHtml5Qrcode)return Promise.resolve();
+  return scanHtml5Qrcode.stop().then(function(){
     scanHtml5Qrcode.clear();
     scanRunning=false;
     document.getElementById('scanStartBtn').style.display='';
@@ -445,6 +467,7 @@ function scanOnStation(name){
   scanMode='station';scanStationName=match;scanBinLoc=null;
   document.getElementById('scanBinView').innerHTML='';
   document.getElementById('scanOrderChecklist').innerHTML='';
+  closePhotoPanel();
   scanBeep(true);
   if(match==='Receiving')renderReceivingPicker();
   else if(match==='Purchased')renderPurchasedPicker();
@@ -455,6 +478,7 @@ function scanOnBin(loc){
   scanMode='bin';scanBinLoc=loc;scanStationName=null;
   document.getElementById('scanReceivingPicker').innerHTML='';
   document.getElementById('scanOrderChecklist').innerHTML='';
+  closePhotoPanel();
   scanBeep(true);
   scanRenderStatus();
   renderScanBinView();
@@ -470,6 +494,7 @@ function scanOnProcess(key){
   document.getElementById('scanReceivingPicker').innerHTML='';
   document.getElementById('scanBinView').innerHTML='';
   document.getElementById('scanOrderChecklist').innerHTML='';
+  closePhotoPanel();
   scanBeep(true);
   scanRenderStatus();
 }
@@ -513,6 +538,10 @@ async function scanOnOrder(orderId){
     return;
   }
   if(scanMode!=='station'||!scanStationName){
+    // No station picked: scanning a finished Local Delivery order's label
+    // (e.g. at the customer's door) goes straight to its drop-off photo.
+    var po=findOrderByScan_(orderId);
+    if(po&&isLocalDelivery_(po)){scanBeep(true);openPhotoPanel(po.id);return;}
     scanSetStatus('⚠ Scan a station or process code first, then scan the order.','mode-err');scanBeep(false);return;
   }
   var o=findOrderByScan_(orderId);
@@ -664,7 +693,7 @@ function renderScanReceivingChecklist(o){
   el.innerHTML=h;
 }
 async function scanSetReceivingStatus(itemId,orderId,status){
-  var i=DB.items.find(function(x){return x.id===itemId;});
+  var i=DB.items.find(function(x){return x.id===itemId&&x.orderId===orderId;});
   if(!i)return;
   if(status==='Received'&&String(i.received)!=='TRUE'&&!await confirmManualReceive_([i]))return;
   i.receivingStatus=status;
@@ -697,13 +726,13 @@ function renderScanOrderChecklist(o,station){
   el.innerHTML=h;
 }
 function scanToggleItem(itemId,flag,val,orderId,station){
-  var i=DB.items.find(function(x){return x.id===itemId;});
+  var i=DB.items.find(function(x){return x.id===itemId&&x.orderId===orderId;});
   if(i){
     i[flag]=val?'TRUE':'';
     var fIdx=['purchased','received','produced','packed'].indexOf(flag);
     if(val&&fIdx>0)['purchased','received','produced','packed'].slice(0,fIdx).forEach(function(cf){i[cf]='TRUE';});
   }
-  postScan({type:'itemFlag',itemId:itemId,field:flag,value:val});
+  postScan({type:'itemFlag',orderId:orderId,itemId:itemId,field:flag,value:val});
   scanBeep(true);
   var o=findOrderByScan_(orderId);
   if(o)renderScanOrderChecklist(o,station);
@@ -712,7 +741,7 @@ function scanToggleAllItems(orderId,station,val){
   var flag=STATION_FLAG[station];
   orderItems(orderId).forEach(function(i){
     i[flag]=val?'TRUE':'';
-    postScan({type:'itemFlag',itemId:i.id,field:flag,value:val});
+    postScan({type:'itemFlag',orderId:orderId,itemId:i.id,field:flag,value:val});
   });
   scanBeep(true);
   var o=findOrderByScan_(orderId);
@@ -796,10 +825,10 @@ function scanFinishPacking(status){
   var o=DB.orders.find(function(x){return x.id===scanPackPendingOrderId;});
   if(!o){scanOrderChecklistClose();return;}
   var ids=scanPackPendingIds||[];
-  var items=DB.items.filter(function(i){return ids.indexOf(i.id)>-1;});
+  var items=DB.items.filter(function(i){return i.orderId===o.id&&ids.indexOf(i.id)>-1;});
   items.forEach(function(i){
     i.packed='TRUE';
-    postScan({type:'itemFlag',itemId:i.id,field:'packed',value:true});
+    postScan({type:'itemFlag',orderId:o.id,itemId:i.id,field:'packed',value:true});
   });
   o.fulfillment=status;
   postScan({type:'orderField',orderId:o.id,field:'fulfillment',value:status});
@@ -815,6 +844,7 @@ function scanFinishPacking(status){
  * mid-scan is too fiddly (per Bob). */
 var scanPackQty={};
 function renderScanPackagingChooser(o){
+  PACKAGE_SIZES=packageSizes_();
   scanPackQty={};
   PACKAGE_SIZES.forEach(function(sz){scanPackQty[sz]=0;});
   scanPackPendingOrderId=null;scanPackPendingIds=null;
@@ -895,7 +925,7 @@ function renderScanProcessChecklist(o,procKey){
  * item is still expected to finish (see setItemBypass), this only stops it
  * from blocking Packing, with a confirm warning shown at Packing scan time. */
 function scanToggleBypass(itemId,orderId,procKey,val){
-  var i=DB.items.find(function(x){return x.id===itemId;});
+  var i=DB.items.find(function(x){return x.id===itemId&&x.orderId===orderId;});
   if(!i)return;
   i.bypass=val?'TRUE':'';
   postScan({type:'bypass',orderId:orderId,itemId:itemId,value:val});
@@ -919,7 +949,7 @@ function scanToggleAllProcess(orderId,procKey,val){
  * a postScan('processDone') call (see handleScanAction_ in Code.gs), which
  * also flips "produced" TRUE once every process tag the item has is done. */
 function setProcessDone(itemId,orderId,procKey,val){
-  var i=DB.items.find(function(x){return x.id===itemId;});
+  var i=DB.items.find(function(x){return x.id===itemId&&x.orderId===orderId;});
   if(!i)return;
   var done=itemProcsDone(i);
   if(val){if(done.indexOf(procKey)===-1)done.push(procKey);}
@@ -951,6 +981,147 @@ function binBump(id,d){
   var cell=document.getElementById('qty-'+id); if(cell)cell.textContent=i.qty;
   postScan({type:'invAdjust',id:id,delta:d});
   scanBeep(true);
+}
+
+/* ============ Local Delivery drop-off photo (Oct 2026 per Bob) ============
+ * Proof for "I never got it." Three ways in:
+ *  1. The tracker's 📷 button on an order opens this page with ?photo=<id>.
+ *  2. "📷 Delivery photo" button up top lists Local Delivery orders that
+ *     still need one (finished in the last 14 days, no photo yet).
+ *  3. Scanning a Local Delivery order's label with no station picked.
+ * The phone's own camera takes the picture (the QR camera is stopped first
+ * so the two don't fight over it). The photo is shrunk to 1600px, stamped
+ * with date/time/order/customer along the bottom, and sent to the tracker
+ * (scanAction 'deliveryPhoto'), which saves it to the "BLC Delivery Photos"
+ * Drive folder on the order and — if the box is checked — emails it to the
+ * customer. */
+var photoOrderId=null, photoB64=null;
+function isLocalDelivery_(o){return String(o.method||'').toLowerCase().replace(/[^a-z]/g,'')==='localdelivery';}
+function isDoneOrPacked_(o){
+  if(isDone(o))return true;
+  var items=orderItems(o.id);
+  return items.length>0&&items.every(function(i){return String(i.packed)==='TRUE';});
+}
+function needsDeliveryPhoto_(o){
+  if(!isLocalDelivery_(o)||o.deliveryPhotoUrl)return false;
+  if(!isDoneOrPacked_(o))return false;
+  var t=new Date(o.doneAt||o.packedAt||'').getTime();
+  return !isNaN(t)&&t>=Date.now()-14*86400000;
+}
+function validEmail_(e){return /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/.test(String(e||'').trim());}
+function closePhotoPanel(){
+  photoOrderId=null;photoB64=null;
+  var p=document.getElementById('photoPanel');if(p)p.innerHTML='';
+}
+function showDeliveryPhotoList(){
+  scanMode=null;scanStationName=null;scanProcessKey=null;scanBinLoc=null;
+  document.getElementById('scanReceivingPicker').innerHTML='';
+  document.getElementById('scanOrderChecklist').innerHTML='';
+  document.getElementById('scanBinView').innerHTML='';
+  photoOrderId=null;photoB64=null;
+  var list=DB.orders.filter(needsDeliveryPhoto_);
+  var el=document.getElementById('photoPanel');
+  if(!list.length){
+    el.innerHTML='<div class="photo-card"><b>📷 Delivery photo</b><p class="muted">No Local Delivery orders waiting on a drop-off photo. (Tap ⟳ Refresh data if you just finished one.)</p><button class="btn ghost small" onclick="closePhotoPanel();scanRenderStatus()">Close</button></div>';
+    return;
+  }
+  el.innerHTML='<div class="photo-card"><b>📷 Which delivery?</b><p class="muted">Local Delivery orders with no drop-off photo yet:</p><div class="row">'
+    +list.map(function(o){return '<button class="btn ghost small" onclick="openPhotoPanel(\''+o.id+'\')">'+esc(o.customer)+(o.orderNumber?' · '+esc(o.orderNumber):'')+'</button>';}).join('')
+    +'</div><div class="row" style="margin-top:10px"><button class="btn ghost small" onclick="closePhotoPanel();scanRenderStatus()">Close</button></div></div>';
+  setTimeout(function(){el.scrollIntoView({behavior:'smooth',block:'start'});},80);
+}
+function openPhotoPanel(orderId){
+  var o=DB.orders.find(function(x){return x.id===orderId;})||findOrderByScan_(orderId);
+  if(!o){scanSetStatus('⚠ Order not found — tap "Refresh data" and try again.','mode-err');scanBeep(false);return;}
+  photoOrderId=o.id;photoB64=null;
+  scanSetStatus('📷 Drop-off photo: '+o.customer,'mode-station');
+  renderPhotoPanel_(o,null);
+}
+function renderPhotoPanel_(o,previewUrl){
+  var hasEmail=validEmail_(o.email);
+  var el=document.getElementById('photoPanel');
+  var h='<div class="photo-card">'
+    +'<div><b>'+esc(o.customer)+'</b>'+(o.orderNumber?' · '+esc(o.orderNumber):'')+'</div>'
+    +(o.address?'<div class="muted">'+esc(String(o.address).replace(/\s*\n\s*/g,', '))+'</div>':'')
+    +(o.deliveryPhotoUrl?'<div class="muted" style="margin-top:4px">Already has a photo — taking another replaces it.</div>':'');
+  if(!previewUrl){
+    h+='<div style="margin-top:12px"><button class="btn big" onclick="takeDeliveryPhoto()">📷 Take photo</button></div>';
+  }else{
+    h+='<img src="'+previewUrl+'" alt="Drop-off photo preview">'
+      +'<label style="display:flex;align-items:center;gap:8px;font-size:14px;margin:6px 0 10px">'
+      +'<input type="checkbox" id="photoEmailChk"'+(hasEmail?' checked':' disabled')+'> '
+      +(hasEmail?'Email this photo to '+esc(o.email):'No customer email on file — photo is just saved to the order')
+      +'</label>'
+      +'<div class="row"><button class="btn big" id="photoSaveBtn" onclick="saveDeliveryPhoto()">✅ Save photo</button></div>'
+      +'<div class="row" style="margin-top:8px"><button class="btn ghost small" onclick="takeDeliveryPhoto()">↺ Retake</button></div>';
+  }
+  h+='<div class="row" style="margin-top:10px"><button class="btn ghost small" onclick="closePhotoPanel();scanRenderStatus()">Cancel</button></div></div>';
+  el.innerHTML=h;
+  setTimeout(function(){el.scrollIntoView({behavior:'smooth',block:'start'});},80);
+}
+function takeDeliveryPhoto(){
+  if(!photoOrderId)return;
+  var inp=document.getElementById('photoInput');
+  inp.value='';
+  // Free the camera from the QR scanner first, then open the phone camera.
+  // The click has to happen right away (still inside this tap) or iOS
+  // blocks it, so it isn't chained onto stopScanner's promise.
+  stopScanner();
+  inp.click();
+}
+function photoPicked(inp){
+  var f=inp.files&&inp.files[0];
+  var o=DB.orders.find(function(x){return x.id===photoOrderId;});
+  if(!f||!o)return;
+  scanSetStatus('📷 Preparing photo…','mode-station');
+  var src=URL.createObjectURL(f);
+  var img=new Image();
+  img.onload=function(){
+    var s=Math.min(1,1600/Math.max(img.width,img.height));
+    var c=document.createElement('canvas');c.width=Math.round(img.width*s);c.height=Math.round(img.height*s);
+    var ctx=c.getContext('2d');ctx.drawImage(img,0,0,c.width,c.height);
+    var label='Delivered '+new Date().toLocaleString('en-US',{timeZone:'America/New_York',month:'numeric',day:'numeric',year:'2-digit',hour:'numeric',minute:'2-digit'})+' ET · '+(o.orderNumber||'')+' · '+(o.customer||'');
+    var fs=Math.max(16,Math.round(c.width/45));
+    ctx.fillStyle='rgba(0,0,0,0.6)';ctx.fillRect(0,c.height-fs*1.8,c.width,fs*1.8);
+    ctx.fillStyle='#fff';ctx.font='bold '+fs+'px Arial';ctx.textBaseline='middle';ctx.fillText(label,fs*0.6,c.height-fs*0.9);
+    URL.revokeObjectURL(src);
+    var dataUrl=c.toDataURL('image/jpeg',0.8);
+    photoB64=dataUrl.split(',')[1];
+    scanSetStatus('📷 Check the photo, then tap Save','mode-station');
+    renderPhotoPanel_(o,dataUrl);
+  };
+  img.onerror=function(){URL.revokeObjectURL(src);scanSetStatus('⚠ Couldn\'t read that photo — try again.','mode-err');scanBeep(false);};
+  img.src=src;
+}
+function saveDeliveryPhoto(){
+  var o=DB.orders.find(function(x){return x.id===photoOrderId;});
+  if(!o||!photoB64)return;
+  var chk=document.getElementById('photoEmailChk');
+  var emailIt=!!(chk&&chk.checked&&!chk.disabled);
+  var btn=document.getElementById('photoSaveBtn');
+  if(btn){btn.disabled=true;btn.textContent='Saving…';}
+  scanSetStatus('📷 Saving photo…','mode-station');
+  postScan({type:'deliveryPhoto',orderId:o.id,photo:photoB64,emailCustomer:emailIt},function(res){
+    var r=res&&res.scanResult;
+    if(r&&r.url){
+      o.deliveryPhotoUrl=r.url;o.deliveredAt=r.deliveredAt;
+      scanBeep(true);
+      closePhotoPanel();
+      scanSetStatus('✅ Drop-off photo saved for '+o.customer+(r.emailed?' — emailed to '+o.email:''),'mode-ok');
+      setTimeout(scanRenderStatus,4000);
+    }else{
+      if(btn){btn.disabled=false;btn.textContent='✅ Save photo';}
+      if(!(res&&res.error))scanSetStatus('⚠ Photo didn\'t save — try again.','mode-err');
+    }
+  });
+}
+/* The tracker's 📷 button opens this page as ...?photo=<orderId>. */
+function openPhotoFromUrl_(){
+  var m=String(location.search||'').match(/[?&]photo=([^&]+)/);
+  if(!m)return;
+  var id=decodeURIComponent(m[1]);
+  try{history.replaceState(null,'',location.pathname);}catch(e){}
+  openPhotoPanel(id);
 }
 
 /* ============ auto-scroll to/from questions ============
