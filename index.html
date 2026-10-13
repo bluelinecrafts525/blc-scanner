@@ -2,7 +2,1172 @@
 <html>
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=devic<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BLC Scanner</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
+<style>
+  :root{--bg:#0d0f12;--panel:#16191f;--panel2:#1e2229;--line:#2a2f38;--blue:#1f6feb;--blueline:#2f81f7;--text:#e6e8eb;--dim:#9aa4b2;--red:#ff6b6b;--amber:#e0a72e;--green:#3fbf60}
+  *{box-sizing:border-box}
+  body{background:var(--bg);color:var(--text);font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:0;padding:16px 14px 60px}
+  header{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+  header .stripe{width:10px;height:32px;border-radius:2px;background:#000;position:relative;overflow:hidden}
+  header .stripe::after{content:'';position:absolute;left:0;right:0;top:14px;height:4px;background:var(--blueline)}
+  header h1{font-size:18px;margin:0}
+  header .sub{color:var(--dim);font-size:12px}
+  .btn{background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:9px 14px;font-size:14px;cursor:pointer}
+  .btn:active{opacity:0.8}
+  .btn.ghost{background:transparent}
+  .btn.small{padding:6px 10px;font-size:12px}
+  .btn.on{background:var(--blueline,#3af);border-color:var(--blueline,#3af);color:#fff}
+  .btn.big{width:100%;padding:16px;font-size:17px;font-weight:700;background:var(--blue);border-color:var(--blue);color:#fff}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  input{background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:14px}
+  .scan-status{font-size:16px;font-weight:700;text-align:center;padding:12px;border-radius:9px;margin:10px 0;background:var(--panel2);border:1px solid var(--line)}
+  .scan-status.mode-station{background:rgba(31,111,235,0.15);border-color:var(--blue)}
+  .scan-status.mode-bin{background:rgba(22,163,74,0.15);border-color:#16a34a}
+  .scan-status.mode-ok{background:rgba(22,163,74,0.2);border-color:#16a34a}
+  .scan-status.mode-err{background:rgba(220,38,38,0.15);border-color:#dc2626}
+  #scanRegion{width:100%;max-width:260px;margin:0 auto;border-radius:10px;overflow:hidden;background:#000}
+  #scanRegion video{width:100%;display:block}
+  .station-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin:14px 0}
+  .station-btn{padding:14px 6px;border-radius:9px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font-weight:700;cursor:pointer;text-align:center}
+  table{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px}
+  th{color:var(--dim);text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.4px;padding:6px 6px;border-bottom:1px solid var(--line)}
+  td{padding:7px 6px;border-bottom:1px solid var(--line);vertical-align:middle}
+  .muted{color:var(--dim);font-size:12px}
+  .scrollx{overflow-x:auto}
+  .banner{background:#3a1518;color:var(--red);border:1px solid #5a2226;border-radius:8px;padding:10px 12px;font-size:13px;margin-bottom:10px;display:none}
+  .cfg{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:14px}
+  .cfg label{display:block;font-size:12px;color:var(--dim);margin-bottom:3px}
+  .cfg input{width:100%;margin-bottom:8px}
+  .photo-card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;margin:12px 0}
+  .photo-card img{width:100%;border-radius:8px;margin:10px 0;display:block}
+  /* Custom confirm/prompt overlay — replaces window.confirm/prompt so the
+   * camera stream never has to sit behind a blocking native browser dialog
+   * (iOS Safari in particular can leave the html5-qrcode video feed frozen
+   * after a confirm()/prompt() call returns). */
+  #scanDialogOverlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;align-items:center;justify-content:center;padding:16px}
+  #scanDialogBox{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;max-width:360px;width:100%}
+  #scanDialogMsg{white-space:pre-wrap;margin-bottom:12px;font-size:15px;line-height:1.4}
+  #scanDialogInputWrap{margin-bottom:12px}
+  #scanDialogInput{width:100%}
+</style>
+</head>
+<body>
+<header>
+  <div class="stripe"></div>
+  <div><h1>BLC Scanner</h1><div class="sub">Blue Line Crafts — standalone scan station</div></div>
+</header>
+
+<div id="cfgBox" class="cfg" style="display:none">
+  <label>Tracker web app URL (the /exec link)</label>
+  <input id="cfgBase" placeholder="https://script.google.com/macros/s/AKfycb.../exec">
+  <label>API token</label>
+  <input id="cfgToken" placeholder="token">
+  <button class="btn" onclick="saveConfig()">Save &amp; connect</button>
+</div>
+
+<div id="offlineBanner" class="banner">⚠ Couldn't reach the tracker. Check your connection, or tap "Change setup" below to fix the URL/token.</div>
+
+<div class="row" style="margin-bottom:8px">
+  <button class="btn" id="scanStartBtn" onclick="startScanner()">▶ Start camera</button>
+  <button class="btn ghost" id="scanStopBtn" onclick="stopScanner()" style="display:none">■ Stop camera</button>
+  <button class="btn ghost small" onclick="scanReset()">↺ Reset</button>
+  <button class="btn ghost small" onclick="loadData(true)">⟳ Refresh data</button>
+  <button class="btn ghost small" onclick="showConfig()">⚙ Change setup</button>
+</div>
+<div class="row" style="margin-bottom:8px">
+  <button class="btn small" onclick="showDeliveryPhotoList()">📷 Delivery photo</button>
+</div>
+
+<div id="scanStatus" class="scan-status">Loading tracker data…</div>
+
+<div id="photoPanel"></div>
+
+<div id="scanRegion"></div>
+
+<div class="row" style="margin:14px 0;justify-content:center">
+  <input id="scanManualInput" placeholder="Or type a code (e.g. BLC:BIN:Bin 7)" style="flex:1;min-width:200px" onkeydown="if(event.key==='Enter')scanManualGo()">
+  <button class="btn ghost small" onclick="scanManualGo()">Go</button>
+</div>
+
+<div id="scanReceivingPicker"></div>
+<div id="scanOrderChecklist"></div>
+<div id="scanBinView"></div>
+<div id="scanThreadView"></div>
+
+<input type="file" id="photoInput" accept="image/*" capture="environment" style="display:none" onchange="photoPicked(this)">
+<input type="file" id="photoLibInput" accept="image/*" style="display:none" onchange="photoPicked(this)">
+
+<div id="scanDialogOverlay">
+  <div id="scanDialogBox">
+    <div id="scanDialogMsg"></div>
+    <div id="scanDialogInputWrap" style="display:none"><input id="scanDialogInput"></div>
+    <div class="row" style="justify-content:flex-end">
+      <button class="btn ghost" id="scanDialogCancelBtn">Cancel</button>
+      <button class="btn" id="scanDialogOkBtn">OK</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ============ config ============ */
+var CFG_KEY='blc_scanner_cfg';
+var CFG={base:'',token:''};
+function loadConfig(){
+  try{
+    var raw=localStorage.getItem(CFG_KEY);
+    if(raw)CFG=JSON.parse(raw);
+  }catch(e){}
+}
+function showConfig(){
+  document.getElementById('cfgBase').value=CFG.base||'';
+  document.getElementById('cfgToken').value=CFG.token||'';
+  document.getElementById('cfgBox').style.display='block';
+}
+function saveConfig(){
+  CFG.base=document.getElementById('cfgBase').value.trim().replace(/\/+$/,'');
+  CFG.token=document.getElementById('cfgToken').value.trim();
+  try{localStorage.setItem(CFG_KEY,JSON.stringify(CFG));}catch(e){}
+  document.getElementById('cfgBox').style.display='none';
+  loadData(true);
+}
+
+/* ============ data ============ */
+var DB={orders:[],items:[],inventory:[],supplies:[],threadSpools:[],threadColors:[],machines:[]};
+function orderItems(oid){return DB.items.filter(function(i){return i.orderId===oid;});}
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+function setOffline(on){document.getElementById('offlineBanner').style.display=on?'block':'none';}
+/* ============ custom confirm/prompt (camera-safe) ============
+ * Native window.confirm()/prompt() block the whole page, and on iOS Safari
+ * that can leave the html5-qrcode camera feed frozen even after the dialog
+ * is dismissed (Bob reported this — "camera is freezing after any
+ * confirmation"). These render an in-page overlay instead, so nothing ever
+ * blocks the main thread and the camera keeps running underneath. Every
+ * call site that used confirm()/prompt() now awaits these. */
+function scanConfirm(msg){
+  return new Promise(function(resolve){
+    document.getElementById('scanDialogMsg').textContent=msg;
+    document.getElementById('scanDialogInputWrap').style.display='none';
+    var ok=document.getElementById('scanDialogOkBtn'), cancel=document.getElementById('scanDialogCancelBtn');
+    ok.style.display='';cancel.style.display='';
+    document.getElementById('scanDialogOverlay').style.display='flex';
+    function done(val){document.getElementById('scanDialogOverlay').style.display='none';resolve(val);}
+    ok.onclick=function(){done(true);};
+    cancel.onclick=function(){done(false);};
+  });
+}
+function scanPrompt(msg,defVal){
+  return new Promise(function(resolve){
+    document.getElementById('scanDialogMsg').textContent=msg;
+    var wrap=document.getElementById('scanDialogInputWrap'), inp=document.getElementById('scanDialogInput');
+    inp.value=defVal==null?'':String(defVal);
+    wrap.style.display='';
+    var ok=document.getElementById('scanDialogOkBtn'), cancel=document.getElementById('scanDialogCancelBtn');
+    ok.style.display='';cancel.style.display='';
+    document.getElementById('scanDialogOverlay').style.display='flex';
+    setTimeout(function(){inp.focus();inp.select();},50);
+    function done(val){document.getElementById('scanDialogOverlay').style.display='none';resolve(val);}
+    ok.onclick=function(){done(inp.value);};
+    cancel.onclick=function(){done(null);};
+    inp.onkeydown=function(e){if(e.key==='Enter'){e.preventDefault();done(inp.value);}};
+  });
+}
+/* Bob wants a checkpoint before an item goes Purchased -> Received any way
+ * OTHER than through PO Check-in (which only runs on the desktop app), but
+ * only for the vendors he actually reconciles against a packing slip:
+ * SanMar and S&S Activewear. Mirrors the same helper in Index.html. */
+var PO_CHECKIN_VENDOR_KEYS_=['sanmar','ssactivewear'];
+function poCheckinVendorKey_(v){return String(v||'').toLowerCase().replace(/[^a-z0-9]/g,'');}
+function isPOCheckinVendor_(vendor){return PO_CHECKIN_VENDOR_KEYS_.indexOf(poCheckinVendorKey_(vendor))>-1;}
+async function confirmManualReceive_(items){
+  var flagged=(items||[]).filter(function(i){return isPOCheckinVendor_(i.vendor);});
+  if(!flagged.length)return true;
+  var names=flagged.slice(0,4).map(function(i){return i.style||i.description||'item';}).join(', ')+(flagged.length>4?', +'+(flagged.length-4)+' more':'');
+  return await scanConfirm('⚠ '+flagged.length+' item(s) ('+names+') are from '+flagged[0].vendor+' — these should be checked in through PO Check-in on the desktop app instead of marked Received here, so a short or wrong shipment gets caught.\n\nMark Received anyway?');
+}
+var dataLoadedOnce_=false;
+function loadData(manual){
+  if(!CFG.base||!CFG.token){showConfig();return;}
+  scanSetStatus('Loading tracker data…');
+  fetch(CFG.base+'?api=orders&token='+encodeURIComponent(CFG.token))
+    .then(function(r){return r.json();})
+    .then(function(json){
+      DB.orders=json.orders||[];DB.items=json.items||[];DB.inventory=json.inventory||[];DB.supplies=json.supplies||[];
+      DB.threadSpools=json.threadSpools||[];DB.threadColors=json.threadColors||[];DB.machines=json.machines||[];
+      setOffline(false);
+      scanRenderStatus();
+      if(manual)scanBeep(true);
+      if(!dataLoadedOnce_){dataLoadedOnce_=true;openPhotoFromUrl_();}
+    })
+    .catch(function(err){
+      setOffline(true);
+      scanSetStatus('⚠ Could not load tracker data — check the URL/token or your connection.','mode-err');
+    });
+}
+/* Fire-and-forget-ish POST to the tracker's scanAction endpoint (see
+ * handleScanAction_ in Code.gs). Uses text/plain to dodge a CORS preflight —
+ * Apps Script still parses the body as JSON regardless of declared type. */
+function postScan(action,onDone){
+  fetch(CFG.base,{
+    method:'POST',
+    headers:{'Content-Type':'text/plain;charset=utf-8'},
+    body:JSON.stringify({token:CFG.token,scanAction:action})
+  }).then(function(r){return r.json();}).then(function(res){
+    setOffline(false);
+    if(res&&res.error){scanSetStatus('⚠ '+res.error,'mode-err');scanBeep(false);}
+    if(onDone)onDone(res);
+  }).catch(function(err){
+    setOffline(true);
+    scanSetStatus('⚠ Could not reach the tracker to save that — try again.','mode-err');
+    scanBeep(false);
+    if(onDone)onDone({ok:false,error:'network'});
+  });
+}
+
+/* ============ scanner state (same logic as the tracker's Scanner tab) ============ */
+var scanHtml5Qrcode=null;
+var scanRunning=false;
+/* The camera decodes continuously (10fps) and the same label usually stays
+ * in frame for a beat after a scan — without this, every dialog-driven flow
+ * (production "are these being produced?", the packing wizard's confirms)
+ * re-fires the instant you tap OK/Cancel and the code is still in view,
+ * which looked like the popup "just kept coming back." Ignore an identical
+ * code seen again within this window; a genuinely new scan of the SAME
+ * order later (e.g. to check it off at a later station) still works once
+ * the window passes. */
+var SCAN_DEDUPE_MS=3000;
+var scanLastCode=null, scanLastCodeAt=0;
+var scanMode=null;
+var scanStationName=null;
+var scanProcessKey=null;
+var scanBinLoc=null;
+/* "Production" as a generic station was retired Sept 2026 — the per-process
+ * QR stations (PROCESS_STATION_KEYS below) already filter to just that
+ * process's items, so they're the only way to scan production now. */
+var STATIONS=['Purchased','Receiving','Packing','Shipping'];
+var STATION_ICON={Purchased:'💰',Receiving:'🚚',Packing:'📦',Shipping:'🚀'};
+var STATION_FLAG={Packing:'packed'};
+var PACK_STAGES=['Needs Ordered','Purchased','Received','In Production','Packed'];
+/* Packaging sizes for the packing wizard — poly bag sizes come straight from
+ * the tracker's Supplies tab (category "Poly Bag"), same as the desktop
+ * app's packageSizes(), so renaming/adding a bag size there (e.g. the
+ * 24x24 -> 19x24 switch) shows up here too and the right supply actually
+ * gets deducted. Boxes aren't stock-tracked, so they stay a fixed list. */
+var PACKAGE_BOX_SIZES=['Small Box','Medium Box','Large Box','XL Box'];
+var PACKAGE_SIZES=[];
+function packageSizes_(){
+  var bags=(DB.supplies||[]).filter(function(s){return s.category==='Poly Bag';}).map(function(s){return s.item;});
+  if(!bags.length)bags=['9x12 Poly Bag','10x13 Poly Bag','12x15 Poly Bag','14x19 Poly Bag','17x22 Poly Bag','19x19 Poly Bag','19x24 Poly Bag'];
+  return bags.concat(PACKAGE_BOX_SIZES);
+}
+/* Every real process EXCEPT Outsource and Shipping gets its own production QR
+ * station (Sept 2026, mirrors PROCESS_STATION_KEYS in Index.html) — must stay
+ * in sync with the canonical list in fixLegacyProcessTags() (Code.gs). */
+var PROCESS_STATION_KEYS=['Apparel:DTF','Apparel:Embroidery','Apparel:Sewing','Apparel:Sublimation','Apparel:Vinyl','Print:UV','Print:Paper','Print:Sublimation','Print:Cut Vinyl','Laser:Flat','Laser:Rotary','Labor:Labor'];
+function procLabel(k){var p=k.split(':');return p[0]===p[1]?p[0]:k.replace(':',' › ');}
+
+function scanSetStatus(msg,cls){
+  var el=document.getElementById('scanStatus');
+  el.textContent=msg;
+  el.className='scan-status'+(cls?(' '+cls):'');
+}
+function scanRenderStatus(){
+  if(scanMode==='station')scanSetStatus(STATION_ICON[scanStationName]+' Station: '+scanStationName+' — now scan (or type) an order\'s QR code','mode-station');
+  else if(scanMode==='process')scanSetStatus('🏭 Process: '+procLabel(scanProcessKey)+' — now scan (or type) an order\'s QR code','mode-station');
+  else if(scanMode==='bin')scanSetStatus('📍 Bin: '+scanBinLoc,'mode-bin');
+  else scanSetStatus('Scan a station, process, or bin code to begin — or scan a Local Delivery order\'s label to take its drop-off photo.');
+}
+function scanReset(){
+  scanMode=null;scanStationName=null;scanProcessKey=null;scanBinLoc=null;
+  document.getElementById('scanReceivingPicker').innerHTML='';
+  document.getElementById('scanOrderChecklist').innerHTML='';
+  document.getElementById('scanBinView').innerHTML='';
+  var tv=document.getElementById('scanThreadView'); if(tv)tv.innerHTML='';
+  closePhotoPanel();
+  scanRenderStatus();
+}
+function startScanner(){
+  if(typeof Html5Qrcode==='undefined'){alert('Camera scanner library failed to load — check your connection and reload.');return;}
+  if(scanRunning)return;
+  scanHtml5Qrcode=new Html5Qrcode('scanRegion');
+  scanHtml5Qrcode.start(
+    {facingMode:'environment'},
+    {fps:10,qrbox:{width:200,height:200}},
+    function(text){scanHandleCode(text);},
+    function(){}
+  ).then(function(){
+    scanRunning=true;
+    document.getElementById('scanStartBtn').style.display='none';
+    document.getElementById('scanStopBtn').style.display='';
+  }).catch(function(err){
+    alert('Could not start camera: '+(err&&err.message?err.message:err));
+  });
+}
+/* Returns a promise so the delivery-photo flow can wait for the QR camera
+ * to fully let go before the phone's own camera opens. */
+function stopScanner(){
+  if(!scanRunning||!scanHtml5Qrcode)return Promise.resolve();
+  return scanHtml5Qrcode.stop().then(function(){
+    scanHtml5Qrcode.clear();
+    scanRunning=false;
+    document.getElementById('scanStartBtn').style.display='';
+    document.getElementById('scanStopBtn').style.display='none';
+  }).catch(function(){scanRunning=false;});
+}
+/* iOS Safari can silently kill the live camera track — screen auto-lock,
+ * switching apps for a second, even just the phone dimming while Bob's
+ * hands are full mid-pack — without telling html5-qrcode. The <video>
+ * element is left showing its last frame forever ("frozen"), and nothing
+ * here was ever restarting it. Whenever the tab becomes visible again,
+ * check the underlying video track's readyState and force a restart if it's
+ * not actually live anymore, so the NEXT scan just works instead of Bob
+ * having to notice, tap Stop, then Start again by hand. */
+function scanRestartIfFrozen_(){
+  if(!scanRunning)return;
+  var live=false;
+  try{
+    var videoEl=document.querySelector('#scanRegion video');
+    var track=videoEl&&videoEl.srcObject&&videoEl.srcObject.getVideoTracks&&videoEl.srcObject.getVideoTracks()[0];
+    live=!!(track&&track.readyState==='live'&&!track.muted);
+  }catch(e){}
+  if(live)return;
+  var restart=function(){scanRunning=false;startScanner();};
+  if(scanHtml5Qrcode)scanHtml5Qrcode.stop().then(function(){scanHtml5Qrcode.clear();restart();}).catch(restart);
+  else restart();
+}
+document.addEventListener('visibilitychange',function(){
+  if(document.visibilityState==='visible')setTimeout(scanRestartIfFrozen_,300);
+});
+window.addEventListener('pageshow',function(){setTimeout(scanRestartIfFrozen_,300);});
+function scanManualGo(){
+  var el=document.getElementById('scanManualInput');
+  var v=el.value.trim();
+  if(!v)return;
+  el.value='';
+  scanHandleCode(v);
+}
+// One shared AudioContext, reused for every beep. A full order-completion
+// flow fires scanBeep 5-8+ times (station scan, order scan, checklist
+// actions, confirms, packaging save), and this used to create a brand-new
+// AudioContext for every single one and never close it. iOS Safari caps how
+// many can be alive at once — after enough scans in a row (which lines up
+// with "freezes after completing an order") new contexts start failing to
+// initialize, and on some iOS versions that hang bleeds into the page's main
+// thread and can leave the camera video looking frozen too. Reusing one
+// context removes the leak entirely.
+var scanAudioCtx_=null;
+function scanBeep(ok){
+  try{
+    if(!scanAudioCtx_)scanAudioCtx_=new (window.AudioContext||window.webkitAudioContext)();
+    if(scanAudioCtx_.state==='suspended')scanAudioCtx_.resume();
+    var o=scanAudioCtx_.createOscillator(),g=scanAudioCtx_.createGain();
+    o.frequency.value=ok?880:220; o.connect(g); g.connect(scanAudioCtx_.destination);
+    g.gain.setValueAtTime(0.15,scanAudioCtx_.currentTime);
+    o.start(); o.stop(scanAudioCtx_.currentTime+0.12);
+  }catch(e){}
+  if(navigator.vibrate)navigator.vibrate(ok?60:[80,60,80]);
+}
+/* QR order labels encode orderNumber when the order has one, falling back to
+ * the internal id only if it doesn't (see the 4x6 label's BLC:ORDER: code in
+ * Index.html) — so every scan lookup must check both, or any order with an
+ * orderNumber never matches its own QR code. */
+function findOrderByScan_(scannedId){
+  return DB.orders.find(function(x){return x.id===scannedId||String(x.orderNumber||'')===String(scannedId);});
+}
+function scanHandleCode(text){
+  var s=String(text||'').trim();
+  var now=Date.now();
+  if(s===scanLastCode&&(now-scanLastCodeAt)<SCAN_DEDUPE_MS)return; // still in frame from the last scan — ignore
+  scanLastCode=s;scanLastCodeAt=now;
+  var m=s.match(/^BLC:(ORDER|BIN|STATION|PROC|SUPPLY|DRAWER):(.+)$/i);
+  if(!m){scanSetStatus('⚠ Not a recognized BLC code: '+s,'mode-err');scanBeep(false);return;}
+  var kind=m[1].toUpperCase(), val=m[2];
+  if(kind==='STATION')return scanOnStation(val);
+  if(kind==='PROC')return scanOnProcess(val);
+  if(kind==='BIN')return scanOnBin(val);
+  if(kind==='ORDER')return scanOnOrder(val);
+  if(kind==='SUPPLY')return scanOnSupply(val);
+  if(kind==='DRAWER')return scanOnDrawer(val);
+}
+function threadColorLookup(threadNumber){
+  var key=String(threadNumber||'').trim().toLowerCase();
+  var hit=(DB.threadColors||[]).find(function(c){return String(c.threadNumber||'').trim().toLowerCase()===key;});
+  return hit?{brand:hit.brand,colorName:hit.colorName}:null;
+}
+/* Mirrors the in-app Scanner tab's scanOnDrawer exactly (see Index.html) —
+ * Add asks for the thread number (auto-fills brand/color if it's already
+ * catalogued); Remove asks the thread number then which machine+needle
+ * it's going onto, which decrements the drawer and loads the needle in one
+ * step via the same removeThreadFromDrawer scanAction. */
+async function scanOnDrawer(drawer){
+  scanBeep(true);
+  document.getElementById('scanReceivingPicker').innerHTML='';
+  document.getElementById('scanOrderChecklist').innerHTML='';
+  document.getElementById('scanBinView').innerHTML='';
+  scanSetStatus('🧵 Drawer: '+drawer,'mode-bin');
+  var mode=((await scanPrompt('Drawer "'+drawer+'" — Add or Remove a spool? (type A or R)'))||'').trim().toLowerCase();
+  if(!mode)return;
+  if(mode.charAt(0)==='a'){
+    var num=((await scanPrompt('Thread number?'))||'').trim();
+    if(!num)return;
+    var hit=threadColorLookup(num);
+    var brand=hit?hit.brand:'', color=hit?hit.colorName:'';
+    if(!hit){
+      brand=((await scanPrompt('Brand? (Madeira / Richword / Other)','Other'))||'').trim();
+      color=((await scanPrompt('Color name?'))||'').trim();
+    }
+    var qty=Number(await scanPrompt('How many spools?','1'))||1;
+    postScan({type:'threadAdd',drawer:drawer,brand:brand,threadNumber:num,color:color,qty:qty},function(res){
+      if(res&&res.ok!==false){
+        loadData();
+        scanSetStatus('✅ Added '+qty+' × '+num+' ('+color+') to '+drawer,'mode-ok');
+      }
+    });
+  } else if(mode.charAt(0)==='r'){
+    var num2=((await scanPrompt('Thread number to remove from '+drawer+'?'))||'').trim();
+    if(!num2)return;
+    var row=(DB.threadSpools||[]).find(function(t){return t.locKind==='drawer'&&t.drawer===drawer&&String(t.threadNumber).toLowerCase()===num2.toLowerCase();});
+    if(!row){scanSetStatus('⚠ '+num2+' isn\'t logged in '+drawer,'mode-err');scanBeep(false);return;}
+    var machines=(DB.machines||[]).filter(function(m){return String(m.archived)!=='TRUE';});
+    var machine=machines.length>1
+      ? ((await scanPrompt('Which machine?\n'+machines.map(function(m){return m.name;}).join(', '), machines[0].name))||'').trim()
+      : (machines[0]?machines[0].name:'Machine 1');
+    if(!machine)return;
+    var needle=Number(await scanPrompt('Which needle is it going on? (1-'+((machines.find(function(m){return m.name===machine;})||{}).needleCount||15)+')'));
+    if(!needle)return;
+    postScan({type:'threadRemove',drawer:drawer,brand:row.brand,threadNumber:row.threadNumber,machine:machine,needle:needle},function(res){
+      loadData();
+      scanSetStatus('✅ '+row.brand+' '+row.threadNumber+' → '+machine+' Needle '+needle,'mode-ok');
+    });
+  } else {
+    scanSetStatus('Type A to add or R to remove.','mode-err');
+  }
+}
+async function scanOnSupply(id){
+  var s=(DB.supplies||[]).find(function(x){return String(x.id)===String(id);});
+  if(!s){scanSetStatus('⚠ Unknown supply code: '+id,'mode-err');scanBeep(false);return;}
+  scanBeep(true);
+  var defaultQty=(String(s.category||'').toLowerCase()==='poly bag')?100:1;
+  var raw=await scanPrompt('Restock "'+s.item+'" — how many to add? (current: '+(s.qty||0)+' '+(s.unit||'')+')',String(defaultQty));
+  if(raw===null)return;
+  var addQty=Number(raw);
+  if(!addQty){scanSetStatus('No change made to '+s.item,'mode-station');return;}
+  postScan({type:'supplyRestock',id:id,addQty:addQty},function(res){
+    if(res&&res.scanResult!=null){
+      s.qty=res.scanResult;
+      scanSetStatus('✅ '+s.item+' restocked: '+s.qty+' '+(s.unit||'')+' on hand','mode-ok');
+    }
+  });
+}
+function scanOnStation(name){
+  var n=name.trim().toLowerCase();
+  var match=STATIONS.find(function(x){return x.toLowerCase()===n;});
+  if(!match)match=STATIONS.find(function(x){var xl=x.toLowerCase();return xl.indexOf(n)===0||n.indexOf(xl)===0;});
+  if(!match){scanSetStatus('⚠ Unknown station: '+name,'mode-err');scanBeep(false);return;}
+  scanMode='station';scanStationName=match;scanBinLoc=null;
+  document.getElementById('scanBinView').innerHTML='';
+  document.getElementById('scanOrderChecklist').innerHTML='';
+  closePhotoPanel();
+  scanBeep(true);
+  if(match==='Receiving')renderReceivingPicker();
+  else if(match==='Purchased')renderPurchasedPicker();
+  else document.getElementById('scanReceivingPicker').innerHTML='';
+  scanRenderStatus();
+}
+function scanOnBin(loc){
+  scanMode='bin';scanBinLoc=loc;scanStationName=null;
+  document.getElementById('scanReceivingPicker').innerHTML='';
+  document.getElementById('scanOrderChecklist').innerHTML='';
+  closePhotoPanel();
+  scanBeep(true);
+  scanRenderStatus();
+  renderScanBinView();
+}
+/* Per-process production station (Sept 2026, mirrors Index.html) — scan one
+ * of the 12 process cards, then scan an order: if none of its items carry
+ * that process, it's a mismatch warning instead of silently proceeding. */
+function scanOnProcess(key){
+  var k=String(key||'').trim();
+  var match=PROCESS_STATION_KEYS.find(function(x){return x===k;});
+  if(!match){scanSetStatus('⚠ Unknown process code: '+key,'mode-err');scanBeep(false);return;}
+  scanMode='process';scanProcessKey=match;scanStationName=null;scanBinLoc=null;
+  document.getElementById('scanReceivingPicker').innerHTML='';
+  document.getElementById('scanBinView').innerHTML='';
+  document.getElementById('scanOrderChecklist').innerHTML='';
+  closePhotoPanel();
+  scanBeep(true);
+  scanRenderStatus();
+}
+/* An item counts as "received" once its receivingStatus is Received or
+ * Ignore — see setItemReceivingStatus in Code.gs. The old boolean
+ * "received" field is kept in sync by the backend, so this can just read it. */
+function itemReceived(i){return String(i.received)==='TRUE';}
+async function scanOnOrder(orderId){
+  if(scanMode==='process'&&scanProcessKey){
+    var op=findOrderByScan_(orderId);
+    if(!op){scanSetStatus('⚠ Order not found: '+orderId+' — tap "Refresh data" if this order was just created.','mode-err');scanBeep(false);return;}
+    var allMatching=orderItems(op.id).filter(function(i){return itemProcs(i).indexOf(scanProcessKey)>-1;});
+    if(!allMatching.length){
+      scanSetStatus('❌ MISMATCH: '+op.customer+' has no '+procLabel(scanProcessKey)+' items — wrong QR or wrong order','mode-err');
+      scanBeep(false);
+      document.getElementById('scanOrderChecklist').innerHTML='';
+      return;
+    }
+    // Sequential gate: can't move to Production until Receiving is done for
+    // that item (Received or Ignore).
+    var matching=allMatching.filter(itemReceived);
+    if(!matching.length){
+      scanSetStatus('❌ Not received yet — scan these item(s) in at the Receiving station first','mode-err');
+      scanBeep(false);
+      document.getElementById('scanOrderChecklist').innerHTML='';
+      return;
+    }
+    scanBeep(true);
+    var notReceivedCount=allMatching.length-matching.length;
+    var notice=notReceivedCount?(' ('+notReceivedCount+' item(s) not shown — not yet received)'):'';
+    var stillOpen=matching.filter(function(i){return itemProcsDone(i).indexOf(scanProcessKey)===-1;});
+    if(stillOpen.length&&await scanConfirm('Are all '+stillOpen.length+' '+procLabel(scanProcessKey)+' item(s) on '+op.customer+'\'s order being produced right now?\n\n(Cancel to pick specific items instead.)')){
+      stillOpen.forEach(function(i){setProcessDone(i.id,op.id,scanProcessKey,true);});
+      scanSetStatus('✅ '+op.customer+' — all '+procLabel(scanProcessKey)+' item(s) marked done'+notice,'mode-ok');
+      document.getElementById('scanOrderChecklist').innerHTML='';
+      setTimeout(scanRenderStatus,2500);
+      return;
+    }
+    scanSetStatus('📋 '+op.customer+' — check off '+procLabel(scanProcessKey)+' item(s) done'+notice,'mode-station');
+    renderScanProcessChecklist(op,scanProcessKey);
+    return;
+  }
+  if(scanMode!=='station'||!scanStationName){
+    // No station picked: scanning a finished Local Delivery order's label
+    // (e.g. at the customer's door) goes straight to its drop-off photo.
+    var po=findOrderByScan_(orderId);
+    if(po&&isLocalDelivery_(po)){scanBeep(true);openPhotoPanel(po.id);return;}
+    scanSetStatus('⚠ Scan a station or process code first, then scan the order.','mode-err');scanBeep(false);return;
+  }
+  var o=findOrderByScan_(orderId);
+  if(!o){scanSetStatus('⚠ Order not found: '+orderId+' — tap "Refresh data" if this order was just created.','mode-err');scanBeep(false);return;}
+  if(scanStationName==='Receiving'){
+    var items=orderItems(o.id);
+    if(!items.length){scanSetStatus('No items on this order','mode-err');scanBeep(false);return;}
+    scanBeep(true);
+    scanSetStatus('📋 '+o.customer+' — mark each item Received/Awaiting/Missing/Ignore','mode-station');
+    renderScanReceivingChecklist(o);
+    return;
+  }
+  if(scanStationName==='Packing'){
+    var pitems=orderItems(o.id);
+    var notProduced=pitems.filter(function(i){return String(i.produced)!=='TRUE';});
+    var blocking=notProduced.filter(function(i){return String(i.bypass)!=='TRUE';});
+    if(blocking.length){
+      scanSetStatus('❌ Not through production yet: '+blocking.map(function(i){return i.style||i.description||'item';}).join(', '),'mode-err');
+      scanBeep(false);
+      return;
+    }
+    if(notProduced.length){
+      if(!await scanConfirm('⚠ '+notProduced.length+' item(s) are bypassed and not yet through production ('+notProduced.map(function(i){return i.style||i.description||'item';}).join(', ')+'). Pack anyway?')){
+        return;
+      }
+    }
+    scanBeep(true);
+    scanPackingFlow(o);
+    return;
+  }
+  if(STATION_FLAG[scanStationName]){
+    scanBeep(true);
+    scanSetStatus('📋 '+o.customer+' — check off the item(s) done at '+scanStationName,'mode-station');
+    renderScanOrderChecklist(o,scanStationName);
+  }else{
+    applyStationToOrder(o,scanStationName);
+  }
+}
+function fulfillmentForShippingScan(method){
+  if(method==='Ship')return 'Shipped';
+  if(method==='Local Delivery')return 'Delivered';
+  return 'Picked Up';
+}
+function applyStationToOrder(o,station){
+  if(station==='Shipping'){
+    var status=fulfillmentForShippingScan(o.method);
+    o.fulfillment=status; // optimistic
+    postScan({type:'orderField',orderId:o.id,field:'fulfillment',value:status});
+    scanBeep(true);
+    scanSetStatus('✅ '+o.customer+' — marked '+status,'mode-ok');
+  }else{
+    // Only reached for Purchased now (from the picker) — Receiving uses the
+    // 4-state checklist below, and Packing/Production always go through a
+    // checklist too.
+    var stageForStation={Purchased:'Purchased'};
+    var stage=stageForStation[station];
+    var flags={
+      'Needs Ordered':{purchased:false,received:false,produced:false,packed:false},
+      'Purchased':{purchased:true,received:false,produced:false,packed:false},
+      'Received':{purchased:true,received:true,produced:false,packed:false},
+      'In Production':{purchased:true,received:true,produced:true,packed:false},
+      'Packed':{purchased:true,received:true,produced:true,packed:true}
+    }[stage];
+    orderItems(o.id).forEach(function(i){
+      i.purchased=flags.purchased?'TRUE':'';i.received=flags.received?'TRUE':'';
+      i.produced=flags.produced?'TRUE':'';i.packed=flags.packed?'TRUE':'';
+    });
+    postScan({type:'orderStage',orderId:o.id,stage:stage});
+    scanBeep(true);
+    scanSetStatus('✅ '+o.customer+' — '+station+' done ('+stage+')','mode-ok');
+  }
+  setTimeout(scanRenderStatus,2500);
+}
+function orderPackState(items){
+  if(!items.length)return 'Needs Ordered';
+  if(items.every(function(i){return String(i.packed)==='TRUE';}))return 'Packed';
+  if(items.every(function(i){return String(i.produced)==='TRUE';}))return 'In Production';
+  if(items.every(function(i){return String(i.received)==='TRUE';}))return 'Received';
+  if(items.every(function(i){return String(i.purchased)==='TRUE';}))return 'Purchased';
+  return 'Needs Ordered';
+}
+function isArchived(o){return String(o.archived)==='TRUE';}
+function isDone(o){return o.fulfillment==='Awaiting Pickup/Delivery'||o.fulfillment==='Shipped'||o.fulfillment==='Delivered'||o.fulfillment==='Picked Up';}
+function renderReceivingPicker(){
+  var open=DB.orders.filter(function(o){return !isArchived(o)&&!isDone(o);});
+  var notReceived=open.filter(function(o){
+    var items=orderItems(o.id);
+    return items.length&&PACK_STAGES.indexOf(orderPackState(items))<2;
+  });
+  var el=document.getElementById('scanReceivingPicker');
+  if(!notReceived.length){el.innerHTML='<p class="muted" style="margin-top:10px">Nothing waiting on Receiving.</p>';return;}
+  var h='<p class="muted" style="margin:10px 0 6px">Tap the order this shipment is for:</p><div class="row">';
+  notReceived.forEach(function(o){
+    h+='<button class="btn ghost small" onclick="receivingPick(\''+o.id+'\')">'+esc(o.customer)+(o.orderNumber?' · '+esc(o.orderNumber):'')+'</button>';
+  });
+  h+='</div>';
+  el.innerHTML=h;
+}
+function renderPurchasedPicker(){
+  var open=DB.orders.filter(function(o){return !isArchived(o)&&!isDone(o);});
+  var needsOrdered=open.filter(function(o){
+    var items=orderItems(o.id);
+    return items.length&&orderPackState(items)==='Needs Ordered';
+  });
+  var el=document.getElementById('scanReceivingPicker'); // shared picker slot — only one station is active at a time
+  if(!needsOrdered.length){el.innerHTML='<p class="muted" style="margin-top:10px">Nothing waiting on Purchasing.</p>';return;}
+  var h='<p class="muted" style="margin:10px 0 6px">Tap the order you just ordered materials for:</p><div class="row">';
+  needsOrdered.forEach(function(o){
+    h+='<button class="btn ghost small" onclick="purchasedPick(\''+o.id+'\')">'+esc(o.customer)+(o.orderNumber?' · '+esc(o.orderNumber):'')+'</button>';
+  });
+  h+='</div>';
+  el.innerHTML=h;
+}
+function purchasedPick(orderId){
+  var o=findOrderByScan_(orderId);
+  if(!o)return;
+  applyStationToOrder(o,'Purchased');
+  renderPurchasedPicker();
+}
+function receivingPick(orderId){
+  var o=findOrderByScan_(orderId);
+  if(!o)return;
+  scanSetStatus('📋 '+o.customer+' — mark each item Received/Awaiting/Missing/Ignore','mode-station');
+  renderScanReceivingChecklist(o);
+}
+/* ---- Receiving checklist: 4-state pick per item (Received/Awaiting/
+ * Missing/Ignore) instead of a plain checkbox — Ignore is for shipping/
+ * add-on lines that don't get received at all. Mirrors Index.html's version. */
+var RECEIVING_STATUSES=['Received','Awaiting','Missing','Ignore'];
+function itemReceivingStatus(i){return i.receivingStatus||'Awaiting';}
+function renderScanReceivingChecklist(o){
+  var items=orderItems(o.id);
+  var el=document.getElementById('scanOrderChecklist');
+  if(!items.length){el.innerHTML='<p class="muted" style="margin-top:10px">This order has no items.</p>';return;}
+  var counts={};RECEIVING_STATUSES.forEach(function(s){counts[s]=0;});
+  items.forEach(function(i){counts[itemReceivingStatus(i)]++;});
+  var summary=RECEIVING_STATUSES.map(function(s){return counts[s]+' '+s;}).join(' · ');
+  var h='<div style="margin:10px 0"><b>'+esc(o.customer)+'</b>'+(o.orderNumber?' · '+esc(o.orderNumber):'')+' — Receiving</div>';
+  h+='<div class="muted" style="margin-bottom:6px">'+summary+'</div>';
+  h+='<div class="scrollx"><table><tr><th>Style/Description</th><th>Color</th><th>Size</th><th>Qty</th><th>Status</th></tr>';
+  items.forEach(function(i){
+    var cur=itemReceivingStatus(i);
+    h+='<tr><td>'+esc(i.style)+(i.description?' — '+esc(i.description):'')+'</td><td>'+esc(i.color)+'</td><td>'+esc(i.size)+'</td><td>'+i.qty+'</td>'
+      +'<td><div class="row" style="gap:4px;flex-wrap:wrap">'+RECEIVING_STATUSES.map(function(s){
+        return '<button class="btn ghost small'+(s===cur?' on':'')+'" onclick="scanSetReceivingStatus(\''+i.id+'\',\''+o.id+'\',\''+s+'\')">'+s+'</button>';
+      }).join('')+'</div></td></tr>';
+  });
+  h+='</table></div><div class="row" style="margin-top:8px;justify-content:flex-end"><button class="btn ghost small" onclick="scanOrderChecklistClose()">Done</button></div>';
+  el.innerHTML=h;
+}
+async function scanSetReceivingStatus(itemId,orderId,status){
+  var i=DB.items.find(function(x){return x.id===itemId&&x.orderId===orderId;});
+  if(!i)return;
+  if(status==='Received'&&String(i.received)!=='TRUE'&&!await confirmManualReceive_([i]))return;
+  i.receivingStatus=status;
+  i.received=(status==='Received'||status==='Ignore')?'TRUE':'';
+  postScan({type:'receivingStatus',orderId:orderId,itemId:itemId,status:status});
+  scanBeep(true);
+  var o=findOrderByScan_(orderId);
+  if(o)renderScanReceivingChecklist(o);
+}
+function procShort(k){var p=k.split(':');if(p[0]===p[1])return p[0];return p[0]==='Outsource'?'Out:'+p[1]:p[1]+(p[1]==='Sublimation'?'('+p[0][0]+')':'');}
+function itemProcs(i){return String(i.process||'').split(',').filter(function(x){return x;});}
+function itemProcsDone(i){return String(i.processDone||'').split(',').filter(function(x){return x;});}
+function renderScanOrderChecklist(o,station){
+  var flag=STATION_FLAG[station];
+  var items=orderItems(o.id);
+  var el=document.getElementById('scanOrderChecklist');
+  if(!items.length){el.innerHTML='<p class="muted" style="margin-top:10px">This order has no items.</p>';return;}
+  var allOn=items.every(function(i){return String(i[flag])==='TRUE';});
+  var h='<div style="margin:10px 0"><b>'+esc(o.customer)+'</b>'+(o.orderNumber?' · '+esc(o.orderNumber):'')+' — '+station+'</div>';
+  h+='<div class="row" style="margin-bottom:6px"><label style="display:flex;align-items:center;gap:6px;cursor:pointer">'
+    +'<input type="checkbox" '+(allOn?'checked':'')+' onchange="scanToggleAllItems(\''+o.id+'\',\''+station+'\',this.checked)"> <b>Select all</b></label></div>';
+  h+='<div class="scrollx"><table><tr><th></th><th>Style/Description</th><th>Color</th><th>Size</th><th>Qty</th><th>Process</th></tr>';
+  items.forEach(function(i){
+    var on=String(i[flag])==='TRUE';
+    h+='<tr><td><input type="checkbox" '+(on?'checked':'')+' onchange="scanToggleItem(\''+i.id+'\',\''+flag+'\',this.checked,\''+o.id+'\',\''+station+'\')"></td>'
+      +'<td>'+esc(i.style)+(i.description?' — '+esc(i.description):'')+'</td><td>'+esc(i.color)+'</td><td>'+esc(i.size)+'</td><td>'+i.qty+'</td>'
+      +'<td class="muted">'+(itemProcs(i).length?itemProcs(i).map(procShort).join(', '):'—')+'</td></tr>';
+  });
+  h+='</table></div><div class="row" style="margin-top:8px"><button class="btn ghost small" onclick="scanOrderChecklistClose()">Done</button></div>';
+  el.innerHTML=h;
+}
+function scanToggleItem(itemId,flag,val,orderId,station){
+  var i=DB.items.find(function(x){return x.id===itemId&&x.orderId===orderId;});
+  if(i){
+    i[flag]=val?'TRUE':'';
+    var fIdx=['purchased','received','produced','packed'].indexOf(flag);
+    if(val&&fIdx>0)['purchased','received','produced','packed'].slice(0,fIdx).forEach(function(cf){i[cf]='TRUE';});
+  }
+  postScan({type:'itemFlag',orderId:orderId,itemId:itemId,field:flag,value:val});
+  scanBeep(true);
+  var o=findOrderByScan_(orderId);
+  if(o)renderScanOrderChecklist(o,station);
+}
+function scanToggleAllItems(orderId,station,val){
+  var flag=STATION_FLAG[station];
+  orderItems(orderId).forEach(function(i){
+    i[flag]=val?'TRUE':'';
+    postScan({type:'itemFlag',orderId:orderId,itemId:i.id,field:flag,value:val});
+  });
+  scanBeep(true);
+  var o=findOrderByScan_(orderId);
+  if(o)renderScanOrderChecklist(o,station);
+}
+function scanOrderChecklistClose(){
+  document.getElementById('scanOrderChecklist').innerHTML='';
+  scanPackSelectedIds=null;scanPackPendingOrderId=null;scanPackPendingIds=null;
+  scanRenderStatus();
+}
+/* ---- Packing scan wizard (Sept 2026, mirrors Index.html) — labels print
+ * once at order intake now and travel with the order, so packing no longer
+ * pops a label modal; instead it walks straight to marking the order done
+ * (Delivered/Shipped/Picked Up) right from the scan. */
+async function scanPackingFlow(o){
+  if(await scanConfirm('📦 '+o.customer+' — is everything ready to be packed?')){
+    renderScanPackMethodChoice(o,orderItems(o.id).map(function(i){return i.id;}));
+    return;
+  }
+  if(!await scanConfirm('Are all items included in this pack?')){
+    renderScanPackSelectChecklist(o);
+    return;
+  }
+  scanSetStatus('Not ready yet — come back once everything is set to pack.','mode-err');
+  document.getElementById('scanOrderChecklist').innerHTML='';
+}
+var scanPackSelectedIds=null;
+function renderScanPackSelectChecklist(o){
+  var items=orderItems(o.id);
+  var el=document.getElementById('scanOrderChecklist');
+  if(!items.length){el.innerHTML='<p class="muted" style="margin-top:10px">This order has no items.</p>';return;}
+  if(!scanPackSelectedIds)scanPackSelectedIds=items.map(function(i){return i.id;});
+  var h='<div style="margin:10px 0"><b>'+esc(o.customer)+'</b>'+(o.orderNumber?' · '+esc(o.orderNumber):'')+' — which items are you packing now?</div>';
+  h+='<div class="scrollx"><table><tr><th></th><th>Style/Description</th><th>Color</th><th>Size</th><th>Qty</th></tr>';
+  items.forEach(function(i){
+    var on=scanPackSelectedIds.indexOf(i.id)>-1;
+    h+='<tr><td><input type="checkbox" '+(on?'checked':'')+' onchange="scanTogglePackSelect(\''+i.id+'\',this.checked)"></td>'
+      +'<td>'+esc(i.style)+(i.description?' — '+esc(i.description):'')+'</td><td>'+esc(i.color)+'</td><td>'+esc(i.size)+'</td><td>'+i.qty+'</td></tr>';
+  });
+  h+='</table></div><div class="row" style="margin-top:8px;justify-content:flex-end"><button class="btn small" onclick="scanPackSelectContinue(\''+o.id+'\')">Continue</button></div>';
+  el.innerHTML=h;
+}
+function scanTogglePackSelect(itemId,val){
+  if(!scanPackSelectedIds)return;
+  if(val){if(scanPackSelectedIds.indexOf(itemId)===-1)scanPackSelectedIds.push(itemId);}
+  else{scanPackSelectedIds=scanPackSelectedIds.filter(function(x){return x!==itemId;});}
+}
+async function scanPackSelectContinue(orderId){
+  var o=DB.orders.find(function(x){return x.id===orderId;});
+  if(!o)return;
+  var ids=scanPackSelectedIds||[];
+  if(!ids.length){scanSetStatus('Select at least one item','mode-err');return;}
+  var separately=await scanConfirm('Are these items being packed and shipped separately from the rest of the order?\n\nOK = yes, separately\nCancel = no, staying together — waiting on the other items');
+  scanPackSelectedIds=null;
+  if(separately){
+    renderScanPackMethodChoice(o,ids);
+  }else{
+    scanBeep(true);
+    scanSetStatus('📝 Noted — please proceed with next order.','mode-ok');
+    document.getElementById('scanOrderChecklist').innerHTML='';
+    setTimeout(scanRenderStatus,2500);
+  }
+}
+var scanPackPendingOrderId=null, scanPackPendingIds=null;
+function renderScanPackMethodChoice(o,itemIds){
+  scanPackPendingOrderId=o.id;scanPackPendingIds=itemIds;
+  var whole=itemIds.length===orderItems(o.id).length;
+  var el=document.getElementById('scanOrderChecklist');
+  var h='<div style="margin:10px 0"><b>'+esc(o.customer)+'</b>'+(o.orderNumber?' · '+esc(o.orderNumber):'')+' — mark '+(whole?'this order':itemIds.length+' item(s)')+' as:</div>';
+  h+='<div class="row" style="gap:8px;flex-wrap:wrap">'
+    +'<button class="btn small" onclick="scanFinishPacking(\'Delivered\')">📬 Packed &amp; Delivered</button>'
+    +'<button class="btn small" onclick="scanFinishPacking(\'Shipped\')">🚚 Packed &amp; Shipped</button>'
+    +'<button class="btn small" onclick="scanFinishPacking(\'Picked Up\')">🏃 Packed &amp; Picked Up</button>'
+    +'</div><div class="row" style="margin-top:8px"><button class="btn ghost small" onclick="scanOrderChecklistClose()">Cancel</button></div>';
+  el.innerHTML=h;
+}
+/* Marks the pending item(s) packed and the order's fulfillment straight to
+ * the done status in one step (postScan for each) — Code.gs's stampDoneAt_
+ * auto-archives it from there. */
+function scanFinishPacking(status){
+  var o=DB.orders.find(function(x){return x.id===scanPackPendingOrderId;});
+  if(!o){scanOrderChecklistClose();return;}
+  var ids=scanPackPendingIds||[];
+  var items=DB.items.filter(function(i){return i.orderId===o.id&&ids.indexOf(i.id)>-1;});
+  items.forEach(function(i){
+    i.packed='TRUE';
+    postScan({type:'itemFlag',orderId:o.id,itemId:i.id,field:'packed',value:true});
+  });
+  o.fulfillment=status;
+  postScan({type:'orderField',orderId:o.id,field:'fulfillment',value:status});
+  scanBeep(true);
+  scanSetStatus('✅ '+o.customer+' — packed & '+status.toLowerCase(),'mode-ok');
+  renderScanPackagingChooser(o);
+}
+/* Asks what size bag/box was used right after marking the order done —
+ * mirrors the in-app Scanner tab's packaging modal (openPackagingModal in
+ * Index.html) so Supplies still gets deducted correctly when packing is
+ * done from the standalone camera scanner instead of the desktop app.
+ * Quantities are +/- steppers, not typed numbers — typing on the phone
+ * mid-scan is too fiddly (per Bob). */
+var scanPackQty={};
+function renderScanPackagingChooser(o){
+  PACKAGE_SIZES=packageSizes_();
+  scanPackQty={};
+  PACKAGE_SIZES.forEach(function(sz){scanPackQty[sz]=0;});
+  scanPackPendingOrderId=null;scanPackPendingIds=null;
+  scanRenderPackagingRows_(o.id);
+}
+function scanPackSizeIdx_(sz){return PACKAGE_SIZES.indexOf(sz);}
+function scanRenderPackagingRows_(orderId){
+  var o=DB.orders.find(function(x){return x.id===orderId;});
+  var el=document.getElementById('scanOrderChecklist');
+  var h='<div style="margin:10px 0"><b>'+esc(o?o.customer:'')+'</b> — 📦 what size bag or box was used?</div>';
+  h+='<div class="scrollx">'+PACKAGE_SIZES.map(function(sz,idx){
+    var n=scanPackQty[sz]||0;
+    return '<div class="row" style="justify-content:space-between;align-items:center;margin-top:6px">'
+      +'<label>'+esc(sz)+'</label>'
+      +'<div class="row" style="gap:8px;align-items:center">'
+      +'<button type="button" class="btn ghost small" onclick="scanPackQtyStep(\''+orderId+'\','+idx+',-1)">−</button>'
+      +'<span style="min-width:20px;text-align:center;display:inline-block;font-weight:700">'+n+'</span>'
+      +'<button type="button" class="btn ghost small" onclick="scanPackQtyStep(\''+orderId+'\','+idx+',1)">+</button>'
+      +'</div></div>';
+  }).join('')+'</div>';
+  h+='<div class="row" style="margin-top:8px;gap:8px">'
+    +'<button class="btn small" onclick="scanSavePackaging(\''+orderId+'\')">Save</button>'
+    +'<button class="btn ghost small" onclick="scanSkipPackaging()">Skip</button>'
+    +'</div>';
+  el.innerHTML=h;
+}
+function scanPackQtyStep(orderId,sizeIdx,delta){
+  var sz=PACKAGE_SIZES[sizeIdx];
+  if(!sz)return;
+  var n=(scanPackQty[sz]||0)+delta;
+  if(n<0)n=0;
+  scanPackQty[sz]=n;
+  scanRenderPackagingRows_(orderId);
+}
+function scanSavePackaging(orderId){
+  var vals={};
+  PACKAGE_SIZES.forEach(function(sz){
+    var n=scanPackQty[sz]||0;
+    if(n>0)vals[sz]=n;
+  });
+  var json=JSON.stringify(vals);
+  var o=DB.orders.find(function(x){return x.id===orderId;});
+  if(o)o.packaging=json;
+  postScan({type:'packaging',orderId:orderId,value:json});
+  scanBeep(true);
+  scanSetStatus('✅ Packaging saved — ready for the next order','mode-ok');
+  document.getElementById('scanOrderChecklist').innerHTML='';
+  setTimeout(scanRenderStatus,2500);
+}
+function scanSkipPackaging(){
+  document.getElementById('scanOrderChecklist').innerHTML='';
+  setTimeout(scanRenderStatus,2500);
+}
+/* Per-process checklist — only lists the order's items that actually carry
+ * that process (mirrors renderScanOrderChecklist but keyed on a process tag
+ * instead of a station flag; see setProcessDone). */
+function renderScanProcessChecklist(o,procKey){
+  var items=orderItems(o.id).filter(function(i){return itemProcs(i).indexOf(procKey)>-1;});
+  var el=document.getElementById('scanOrderChecklist');
+  if(!items.length){el.innerHTML='<p class="muted" style="margin-top:10px">This order has no '+procLabel(procKey)+' items.</p>';return;}
+  var allOn=items.every(function(i){return itemProcsDone(i).indexOf(procKey)>-1;});
+  var h='<div style="margin:10px 0"><b>'+esc(o.customer)+'</b>'+(o.orderNumber?' · '+esc(o.orderNumber):'')+' — '+esc(procLabel(procKey))+'</div>';
+  h+='<div class="row" style="margin-bottom:6px"><label style="display:flex;align-items:center;gap:6px;cursor:pointer">'
+    +'<input type="checkbox" '+(allOn?'checked':'')+' onchange="scanToggleAllProcess(\''+o.id+'\',\''+procKey+'\',this.checked)"> <b>Select all</b></label></div>';
+  h+='<div class="scrollx"><table><tr><th></th><th>Style/Description</th><th>Color</th><th>Size</th><th>Qty</th><th>All processes</th><th>Bypass</th></tr>';
+  items.forEach(function(i){
+    var on=itemProcsDone(i).indexOf(procKey)>-1;
+    var byp=String(i.bypass)==='TRUE';
+    h+='<tr><td><input type="checkbox" '+(on?'checked':'')+' onchange="scanToggleProcessItem(\''+i.id+'\',\''+procKey+'\',this.checked,\''+o.id+'\')"></td>'
+      +'<td>'+esc(i.style)+(i.description?' — '+esc(i.description):'')+'</td><td>'+esc(i.color)+'</td><td>'+esc(i.size)+'</td><td>'+i.qty+'</td>'
+      +'<td class="muted">'+itemProcs(i).map(procShort).join(', ')+'</td>'
+      +'<td><button class="btn ghost small'+(byp?' on':'')+'" title="Let Packing proceed without this item finishing production" onclick="scanToggleBypass(\''+i.id+'\',\''+o.id+'\',\''+procKey+'\','+(!byp)+')">'+(byp?'🚫 Bypassed':'Bypass')+'</button></td></tr>';
+  });
+  h+='</table></div><div class="row" style="margin-top:8px"><button class="btn ghost small" onclick="scanOrderChecklistClose()">Done</button></div>';
+  el.innerHTML=h;
+}
+/* Lets Packing proceed on an item that isn't through production yet — the
+ * item is still expected to finish (see setItemBypass), this only stops it
+ * from blocking Packing, with a confirm warning shown at Packing scan time. */
+function scanToggleBypass(itemId,orderId,procKey,val){
+  var i=DB.items.find(function(x){return x.id===itemId&&x.orderId===orderId;});
+  if(!i)return;
+  i.bypass=val?'TRUE':'';
+  postScan({type:'bypass',orderId:orderId,itemId:itemId,value:val});
+  scanBeep(true);
+  var o=findOrderByScan_(orderId);
+  if(o)renderScanProcessChecklist(o,procKey);
+}
+function scanToggleProcessItem(itemId,procKey,val,orderId){
+  setProcessDone(itemId,orderId,procKey,val);
+  scanBeep(true);
+  var o=findOrderByScan_(orderId);
+  if(o)renderScanProcessChecklist(o,procKey);
+}
+function scanToggleAllProcess(orderId,procKey,val){
+  orderItems(orderId).filter(function(i){return itemProcs(i).indexOf(procKey)>-1;}).forEach(function(i){setProcessDone(i.id,orderId,procKey,val);});
+  scanBeep(true);
+  var o=findOrderByScan_(orderId);
+  if(o)renderScanProcessChecklist(o,procKey);
+}
+/* Marks one process done/not-done on one item — optimistic local update +
+ * a postScan('processDone') call (see handleScanAction_ in Code.gs), which
+ * also flips "produced" TRUE once every process tag the item has is done. */
+function setProcessDone(itemId,orderId,procKey,val){
+  var i=DB.items.find(function(x){return x.id===itemId&&x.orderId===orderId;});
+  if(!i)return;
+  var done=itemProcsDone(i);
+  if(val){if(done.indexOf(procKey)===-1)done.push(procKey);}
+  else{done=done.filter(function(p){return p!==procKey;});}
+  i.processDone=done.join(',');
+  var procs=itemProcs(i);
+  var allDone=procs.length>0&&procs.every(function(p){return done.indexOf(p)>-1;});
+  i.produced=allDone?'TRUE':'';
+  postScan({type:'processDone',orderId:orderId,itemId:itemId,processKey:procKey,value:val});
+}
+function renderScanBinView(){
+  var el=document.getElementById('scanBinView');
+  var items=DB.inventory.filter(function(i){return i.location===scanBinLoc;});
+  var h='';
+  if(!items.length){h='<p class="muted">No stock currently in '+esc(scanBinLoc)+'.</p>';el.innerHTML=h;return;}
+  h+='<div class="scrollx"><table><tr><th>Style/Description</th><th>Color</th><th>Size</th><th>Qty</th><th></th></tr>';
+  items.forEach(function(i){
+    h+='<tr><td>'+esc(i.style)+(i.description?' — '+esc(i.description):'')+'</td><td>'+esc(i.color)+'</td><td>'+esc(i.size)+'</td>'
+      +'<td id="qty-'+i.id+'">'+i.qty+'</td>'
+      +'<td><button class="btn ghost small" onclick="binBump(\''+i.id+'\',-1)">−</button> <button class="btn ghost small" onclick="binBump(\''+i.id+'\',1)">+</button></td></tr>';
+  });
+  h+='</table></div>';
+  el.innerHTML=h;
+}
+function binBump(id,d){
+  var i=DB.inventory.find(function(x){return x.id===id;});
+  if(!i)return;
+  i.qty=Math.max(0,(Number(i.qty)||0)+d);
+  var cell=document.getElementById('qty-'+id); if(cell)cell.textContent=i.qty;
+  postScan({type:'invAdjust',id:id,delta:d});
+  scanBeep(true);
+}
+
+/* ============ Local Delivery drop-off photo (Oct 2026 per Bob) ============
+ * Proof for "I never got it." Three ways in:
+ *  1. The tracker's 📷 button on an order opens this page with ?photo=<id>.
+ *  2. "📷 Delivery photo" button up top lists Local Delivery orders that
+ *     still need one (finished in the last 14 days, no photo yet).
+ *  3. Scanning a Local Delivery order's label with no station picked.
+ * The phone's own camera takes the picture (the QR camera is stopped first
+ * so the two don't fight over it). The photo is shrunk to 1600px, stamped
+ * with date/time/order/customer along the bottom, and sent to the tracker
+ * (scanAction 'deliveryPhoto'), which saves it to the "BLC Delivery Photos"
+ * Drive folder on the order and — if the box is checked — emails it to the
+ * customer. */
+var photoOrderId=null, photoB64=null;
+function isLocalDelivery_(o){return String(o.method||'').toLowerCase().replace(/[^a-z]/g,'')==='localdelivery';}
+function isDoneOrPacked_(o){
+  if(isDone(o))return true;
+  var items=orderItems(o.id);
+  return items.length>0&&items.every(function(i){return String(i.packed)==='TRUE';});
+}
+function needsDeliveryPhoto_(o){
+  if(!isLocalDelivery_(o)||o.deliveryPhotoUrl)return false;
+  if(!isDoneOrPacked_(o))return false;
+  var t=new Date(o.doneAt||o.packedAt||'').getTime();
+  return !isNaN(t)&&t>=Date.now()-14*86400000;
+}
+function validEmail_(e){return /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/.test(String(e||'').trim());}
+function closePhotoPanel(){
+  photoOrderId=null;photoB64=null;
+  var p=document.getElementById('photoPanel');if(p)p.innerHTML='';
+}
+function showDeliveryPhotoList(){
+  scanMode=null;scanStationName=null;scanProcessKey=null;scanBinLoc=null;
+  document.getElementById('scanReceivingPicker').innerHTML='';
+  document.getElementById('scanOrderChecklist').innerHTML='';
+  document.getElementById('scanBinView').innerHTML='';
+  photoOrderId=null;photoB64=null;
+  var list=DB.orders.filter(needsDeliveryPhoto_);
+  var el=document.getElementById('photoPanel');
+  if(!list.length){
+    el.innerHTML='<div class="photo-card"><b>📷 Delivery photo</b><p class="muted">No Local Delivery orders waiting on a drop-off photo. (Tap ⟳ Refresh data if you just finished one.)</p><button class="btn ghost small" onclick="closePhotoPanel();scanRenderStatus()">Close</button></div>';
+    return;
+  }
+  el.innerHTML='<div class="photo-card"><b>📷 Which delivery?</b><p class="muted">Local Delivery orders with no drop-off photo yet:</p><div class="row">'
+    +list.map(function(o){return '<button class="btn ghost small" onclick="openPhotoPanel(\''+o.id+'\')">'+esc(o.customer)+(o.orderNumber?' · '+esc(o.orderNumber):'')+'</button>';}).join('')
+    +'</div><div class="row" style="margin-top:10px"><button class="btn ghost small" onclick="closePhotoPanel();scanRenderStatus()">Close</button></div></div>';
+  setTimeout(function(){el.scrollIntoView({behavior:'smooth',block:'start'});},80);
+}
+function openPhotoPanel(orderId){
+  var o=DB.orders.find(function(x){return x.id===orderId;})||findOrderByScan_(orderId);
+  if(!o){scanSetStatus('⚠ Order not found — tap "Refresh data" and try again.','mode-err');scanBeep(false);return;}
+  photoOrderId=o.id;photoB64=null;
+  scanSetStatus('📷 Drop-off photo: '+o.customer,'mode-station');
+  renderPhotoPanel_(o,null);
+}
+function renderPhotoPanel_(o,previewUrl){
+  var hasEmail=validEmail_(o.email);
+  var el=document.getElementById('photoPanel');
+  var h='<div class="photo-card">'
+    +'<div><b>'+esc(o.customer)+'</b>'+(o.orderNumber?' · '+esc(o.orderNumber):'')+'</div>'
+    +(o.address?'<div class="muted">'+esc(String(o.address).replace(/\s*\n\s*/g,', '))+'</div>':'')
+    +(o.deliveryPhotoUrl?'<div class="muted" style="margin-top:4px">Already has a photo — taking another replaces it.</div>':'');
+  if(!previewUrl){
+    h+='<div style="margin-top:12px"><button class="btn big" onclick="takeDeliveryPhoto()">📷 Take photo</button></div>'
+      +'<div style="margin-top:8px"><button class="btn big ghost" onclick="takeDeliveryPhoto(true)">🖼️ Choose from photo library</button></div>';
+  }else{
+    h+='<img src="'+previewUrl+'" alt="Drop-off photo preview">'
+      +'<label style="display:flex;align-items:center;gap:8px;font-size:14px;margin:6px 0 10px">'
+      +'<input type="checkbox" id="photoEmailChk"'+(hasEmail?' checked':' disabled')+'> '
+      +(hasEmail?'Email this photo to '+esc(o.email):'No customer email on file — photo is just saved to the order')
+      +'</label>'
+      +'<div class="row"><button class="btn big" id="photoSaveBtn" onclick="saveDeliveryPhoto()">✅ Save photo</button></div>'
+      +'<div class="row" style="margin-top:8px"><button class="btn ghost small" onclick="takeDeliveryPhoto()">↺ Retake</button><button class="btn ghost small" onclick="takeDeliveryPhoto(true)">🖼️ Pick a different photo</button></div>';
+  }
+  h+='<div class="row" style="margin-top:10px"><button class="btn ghost small" onclick="closePhotoPanel();scanRenderStatus()">Cancel</button></div></div>';
+  el.innerHTML=h;
+  setTimeout(function(){el.scrollIntoView({behavior:'smooth',block:'start'});},80);
+}
+/* fromLibrary (Oct 2026 per Bob): opens the photo library picker instead of
+ * the camera, for drop-off photos already taken with the phone's camera app. */
+function takeDeliveryPhoto(fromLibrary){
+  if(!photoOrderId)return;
+  var inp=document.getElementById(fromLibrary?'photoLibInput':'photoInput');
+  inp.value='';
+  // Free the camera from the QR scanner first, then open the phone camera.
+  // The click has to happen right away (still inside this tap) or iOS
+  // blocks it, so it isn't chained onto stopScanner's promise.
+  stopScanner();
+  inp.click();
+}
+function photoPicked(inp){
+  var f=inp.files&&inp.files[0];
+  var o=DB.orders.find(function(x){return x.id===photoOrderId;});
+  if(!f||!o)return;
+  scanSetStatus('📷 Preparing photo…','mode-station');
+  var src=URL.createObjectURL(f);
+  var img=new Image();
+  img.onload=function(){
+    var s=Math.min(1,1600/Math.max(img.width,img.height));
+    var c=document.createElement('canvas');c.width=Math.round(img.width*s);c.height=Math.round(img.height*s);
+    var ctx=c.getContext('2d');ctx.drawImage(img,0,0,c.width,c.height);
+    // Library photos: stamp the photo's own date/time when the phone provides
+    // one (falls back to now).
+    var when=(inp.id==='photoLibInput'&&f.lastModified)?new Date(f.lastModified):new Date();
+    var label='Delivered '+when.toLocaleString('en-US',{timeZone:'America/New_York',month:'numeric',day:'numeric',year:'2-digit',hour:'numeric',minute:'2-digit'})+' ET · '+(o.orderNumber||'')+' · '+(o.customer||'');
+    var fs=Math.max(16,Math.round(c.width/45));
+    ctx.fillStyle='rgba(0,0,0,0.6)';ctx.fillRect(0,c.height-fs*1.8,c.width,fs*1.8);
+    ctx.fillStyle='#fff';ctx.font='bold '+fs+'px Arial';ctx.textBaseline='middle';ctx.fillText(label,fs*0.6,c.height-fs*0.9);
+    URL.revokeObjectURL(src);
+    var dataUrl=c.toDataURL('image/jpeg',0.8);
+    photoB64=dataUrl.split(',')[1];
+    scanSetStatus('📷 Check the photo, then tap Save','mode-station');
+    renderPhotoPanel_(o,dataUrl);
+  };
+  img.onerror=function(){URL.revokeObjectURL(src);scanSetStatus('⚠ Couldn\'t read that photo — try again.','mode-err');scanBeep(false);};
+  img.src=src;
+}
+function saveDeliveryPhoto(){
+  var o=DB.orders.find(function(x){return x.id===photoOrderId;});
+  if(!o||!photoB64)return;
+  var chk=document.getElementById('photoEmailChk');
+  var emailIt=!!(chk&&chk.checked&&!chk.disabled);
+  var btn=document.getElementById('photoSaveBtn');
+  if(btn){btn.disabled=true;btn.textContent='Saving…';}
+  scanSetStatus('📷 Saving photo…','mode-station');
+  postScan({type:'deliveryPhoto',orderId:o.id,photo:photoB64,emailCustomer:emailIt},function(res){
+    var r=res&&res.scanResult;
+    if(r&&r.url){
+      o.deliveryPhotoUrl=r.url;o.deliveredAt=r.deliveredAt;
+      scanBeep(true);
+      closePhotoPanel();
+      scanSetStatus('✅ Drop-off photo saved for '+o.customer+(r.emailed?' — emailed to '+o.email:''),'mode-ok');
+      setTimeout(scanRenderStatus,4000);
+    }else{
+      if(btn){btn.disabled=false;btn.textContent='✅ Save photo';}
+      if(!(res&&res.error))scanSetStatus('⚠ Photo didn\'t save — try again.','mode-err');
+    }
+  });
+}
+/* The tracker's 📷 button opens this page as ...?photo=<orderId>. */
+function openPhotoFromUrl_(){
+  var m=String(location.search||'').match(/[?&]photo=([^&]+)/);
+  if(!m)return;
+  var id=decodeURIComponent(m[1]);
+  try{history.replaceState(null,'',location.pathname);}catch(e){}
+  openPhotoPanel(id);
+}
+
+/* ============ auto-scroll to/from questions ============
+ * Checklists, pickers, etc. render below the camera and were landing off
+ * the bottom of the screen — Bob reported it looked like "nothing's
+ * happening." When one of these areas goes from empty to showing something,
+ * scroll it into view automatically; when it goes back to empty (the step
+ * finished), scroll back to the top so the "✅ done" status is visible
+ * instead of a blank area at the bottom. Covers every render function that
+ * writes into these divs without needing to touch each one individually. */
+function scanAutoScrollSetup_(ids){
+  ids.forEach(function(id){
+    var el=document.getElementById(id);
+    if(!el)return;
+    var hadContent=false;
+    new MutationObserver(function(){
+      var has=!!el.innerHTML.trim();
+      if(has&&!hadContent){
+        setTimeout(function(){el.scrollIntoView({behavior:'smooth',block:'start'});},80);
+      }else if(!has&&hadContent){
+        setTimeout(function(){window.scrollTo({top:0,behavior:'smooth'});},80);
+      }
+      hadContent=has;
+    }).observe(el,{childList:true,subtree:true,characterData:true});
+  });
+}
+scanAutoScrollSetup_(['scanOrderChecklist','scanReceivingPicker','scanBinView','scanThreadView']);
+
+/* ============ boot ============ */
+loadConfig();
+if(!CFG.base||!CFG.token)showConfig();
+loadData();
+</script>
+</body>
+</html>e-width, initial-scale=1">
 <title>BLC Scanner</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
 <style>
