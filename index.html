@@ -287,9 +287,16 @@ function scanReset(){
   closePhotoPanel();
   scanRenderStatus();
 }
+/* Oct 2026 fix (double camera view on the phone): a second start — a double
+ * tap, or the "frozen camera" auto-restart firing while one was still
+ * starting — used to stack a second live video under the first. Now only one
+ * start can be in flight, and the camera box is emptied before each start. */
+var scanStarting=false;
 function startScanner(){
   if(typeof Html5Qrcode==='undefined'){alert('Camera scanner library failed to load — check your connection and reload.');return;}
-  if(scanRunning)return;
+  if(scanRunning||scanStarting)return;
+  scanStarting=true;
+  var region=document.getElementById('scanRegion');if(region)region.innerHTML='';
   scanHtml5Qrcode=new Html5Qrcode('scanRegion');
   scanHtml5Qrcode.start(
     {facingMode:'environment'},
@@ -297,10 +304,12 @@ function startScanner(){
     function(text){scanHandleCode(text);},
     function(){}
   ).then(function(){
+    scanStarting=false;
     scanRunning=true;
     document.getElementById('scanStartBtn').style.display='none';
     document.getElementById('scanStopBtn').style.display='';
   }).catch(function(err){
+    scanStarting=false;
     alert('Could not start camera: '+(err&&err.message?err.message:err));
   });
 }
@@ -324,16 +333,16 @@ function stopScanner(){
  * not actually live anymore, so the NEXT scan just works instead of Bob
  * having to notice, tap Stop, then Start again by hand. */
 function scanRestartIfFrozen_(){
-  if(!scanRunning)return;
+  if(!scanRunning||scanStarting)return;
   var live=false;
   try{
     var videoEl=document.querySelector('#scanRegion video');
     var track=videoEl&&videoEl.srcObject&&videoEl.srcObject.getVideoTracks&&videoEl.srcObject.getVideoTracks()[0];
-    live=!!(track&&track.readyState==='live'&&!track.muted);
+    live=!!(track&&track.readyState==='live');
   }catch(e){}
   if(live)return;
-  var restart=function(){scanRunning=false;startScanner();};
-  if(scanHtml5Qrcode)scanHtml5Qrcode.stop().then(function(){scanHtml5Qrcode.clear();restart();}).catch(restart);
+  var restart=function(){scanRunning=false;try{scanHtml5Qrcode&&scanHtml5Qrcode.clear();}catch(e){}startScanner();};
+  if(scanHtml5Qrcode)scanHtml5Qrcode.stop().then(restart).catch(restart);
   else restart();
 }
 document.addEventListener('visibilitychange',function(){
